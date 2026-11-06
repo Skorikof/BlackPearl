@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 
 
 @dataclass
@@ -9,7 +11,10 @@ class MediaInfo:
     url: str
     media_type: str
     duration_seconds: float | None = None
-    
+
+
+ProgressCallback = Callable[[float], None]
+
 
 class MediaProvider(ABC):
     """Базовый интерфейс источника медиа."""
@@ -24,6 +29,12 @@ class MediaProvider(ABC):
         ...
         
     @abstractmethod
-    def download(self, url: str, output_path: Path) -> None:
+    def download(
+        self,
+        url: str,
+        output_dir: Path,
+        progress_callback: ProgressCallback | None = None,
+        cancel_event: Event | None = None,
+        ) -> None:
         """Скачивает медиа по данному URL в указанный путь."""
         ...

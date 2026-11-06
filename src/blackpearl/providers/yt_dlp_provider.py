@@ -1,9 +1,10 @@
 from pathlib import Path
+from threading import Event
 from urllib.parse import urlparse
 
 import yt_dlp
 
-from blackpearl.providers.base import MediaInfo, MediaProvider
+from blackpearl.providers.base import MediaInfo, MediaProvider, ProgressCallback
 
 
 class YtDlpProvider(MediaProvider):
@@ -43,16 +44,42 @@ class YtDlpProvider(MediaProvider):
             duration_seconds=info.get("duration"),
         )
 
-    def download(self, url: str, output_dir: Path) -> None:
+    
+    def download(
+        self,
+        url: str,
+        output_dir: Path,
+        progress_callback: ProgressCallback | None = None,
+        cancel_event: Event | None = None,
+        ) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        def progress_hook(data: dict) -> None:
+            if cancel_event is not None and cancel_event.is_set():
+                raise yt_dlp.utils.DownloadCancelled(
+                    "Загрузка отменена пользователем"
+                )
+
+            if data.get("status") != "downloading":
+                return
+
+            downloaded = data.get("downloaded_bytes", 0)
+            total = (
+                data.get("total_bytes")
+                or data.get("total_bytes_estimate")
+            )
+
+            if total and progress_callback is not None:
+                percent = downloaded / total * 100
+                progress_callback(min(percent, 100.0))
+
         options = {
-            "paths": {
-                "home": str(output_dir),
-            },
+            "paths": {"home": str(output_dir)},
             "outtmpl": "%(title)s.%(ext)s",
             "noplaylist": True,
+            "progress_hooks": [progress_hook],
         }
 
         with yt_dlp.YoutubeDL(options) as downloader:
             downloader.download([url])
+
