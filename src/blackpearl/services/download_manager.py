@@ -25,6 +25,7 @@ class DownloadManager(QObject):
         provider: MediaProvider,
         url: str,
         output_dir: Path,
+        audio_bitrate_kbps: int = 192,
     ) -> None:
         if self._thread is not None:
             raise RuntimeError("Загрузка уже выполняется")
@@ -37,6 +38,7 @@ class DownloadManager(QObject):
             url=url,
             output_dir=output_dir,
             cancel_event=self._cancel_event,
+            audio_bitrate_kbps=audio_bitrate_kbps,
         )
 
         self._worker.moveToThread(self._thread)

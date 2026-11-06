@@ -9,6 +9,8 @@ description = "Universal media downloader"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "mutagen>=1.48.1",
+    "pillow>=13.0.0",
     "pyside6>=6.8",
     "python-dotenv>=1.2.4",
     "yandex-music>=3.2.2",

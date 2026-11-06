@@ -2,6 +2,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Slot
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -82,6 +83,16 @@ class MainWindow(QMainWindow):
         layout.addLayout(download_buttons)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
+        
+        self.quality_combo = QComboBox()
+
+        self.quality_combo.addItem("128 кбит/с", 128)
+        self.quality_combo.addItem("192 кбит/с", 192)
+        self.quality_combo.addItem("320 кбит/с", 320)
+
+        self.quality_combo.setCurrentIndex(1)
+        
+        layout.addWidget(self.quality_combo)
 
         central_widget = QWidget()
         central_widget.setLayout(layout)
@@ -182,6 +193,7 @@ class MainWindow(QMainWindow):
                 provider=self._current_provider,
                 url=self._current_url,
                 output_dir=Path(output_dir),
+                audio_bitrate_kbps=self.quality_combo.currentData(),
             )
 
         except RuntimeError as error:

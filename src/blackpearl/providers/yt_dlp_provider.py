@@ -49,6 +49,7 @@ class YtDlpProvider(MediaProvider):
         self,
         url: str,
         output_dir: Path,
+        audio_bitrate_kbps: int | None = None,
         progress_callback: ProgressCallback | None = None,
         cancel_event: Event | None = None,
         ) -> None:

@@ -18,12 +18,14 @@ class DownloadWorker(QObject):
         self,
         provider: MediaProvider,
         url: str,
+        audio_bitrate_kbps: int,
         output_dir: Path,
         cancel_event: Event,
     ) -> None:
         super().__init__()
         self.provider = provider
         self.url = url
+        self.audio_bitrate_kbps = audio_bitrate_kbps
         self.output_dir = output_dir
         self.cancel_event = cancel_event
 
@@ -33,6 +35,7 @@ class DownloadWorker(QObject):
             self.provider.download(
                 url=self.url,
                 output_dir=self.output_dir,
+                audio_bitrate_kbps=self.audio_bitrate_kbps,
                 progress_callback=self.progress_changed.emit,
                 cancel_event=self.cancel_event,
             )
