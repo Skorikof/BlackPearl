@@ -9,7 +9,8 @@ description = "Universal media downloader"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "pyside6>=6.8"
+    "pyside6>=6.8",
+    "yt-dlp>=2026.10.26",
 ]
 
 [project.optional-dependencies]

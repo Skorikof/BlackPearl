@@ -1,5 +1,6 @@
-import pytest
 from pathlib import Path
+
+import pytest
 
 from blackpearl.providers.base import MediaInfo, MediaProvider
 
