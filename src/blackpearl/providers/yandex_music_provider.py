@@ -17,21 +17,40 @@ from PIL import Image
 from yandex_music import Client
 
 from blackpearl.core.config import settings
-from blackpearl.providers.base import MediaInfo, MediaProvider
+from blackpearl.providers.base import MediaInfo, MediaProvider, TrackEntry
 
 
 class YandexMusicProvider(MediaProvider):
     """Провайдер для работы с Яндекс Музыкой."""
     TRACK_PATTERN = re.compile(r"/track/(\d+)")
     ALBUM_PATTERN = re.compile(r"/album/(\d+)")
+    PLAYLIST_PATTERN = re.compile(r"/users/([^/]+)/playlists/(\d+)")
+    PLAYLIST_UUID_PATTERN = re.compile(r"/playlists/((?:lk\.)?[0-9a-fA-F]{8}-"
+                                    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                                    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+                                    )
 
     def can_handle(self, url: str) -> bool:
         parsed = urlparse(url)
-        return (
-            parsed.scheme in {"http", "https"}
-            and parsed.hostname is not None
-            and parsed.hostname.startswith("music.yandex.")
-            and self.TRACK_PATTERN.search(parsed.path) is not None
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.hostname not in {
+                "music.yandex.ru",
+                "music.yandex.com",
+                "music.yandex.by",
+                "music.yandex.kz",
+            }
+        ):
+            return False
+        path = parsed.path
+        return any(
+            pattern.search(path)
+            for pattern in (
+                self.TRACK_PATTERN,
+                self.ALBUM_PATTERN,
+                self.PLAYLIST_PATTERN,
+                self.PLAYLIST_UUID_PATTERN,
+            )
         )
 
     def _get_track_id(self, url: str) -> tuple[str, str | None]:
@@ -188,6 +207,93 @@ class YandexMusicProvider(MediaProvider):
             
         tags.update_to_v23()
         tags.save(output_path, v2_version=3)
+        
+    def _make_track_entry(self, item) -> TrackEntry | None:
+        """Преобразует объект библиотеки в элемент нашей коллекции."""
+        track = getattr(item, "track", None) or item
+        # TrackShort может содержать только краткую информацию.
+        if not getattr(track, "title", None):
+            fetch_track = getattr(item, "fetch_track", None)
+            if fetch_track is not None:
+                track = fetch_track()
+        track_id = getattr(track, "id", None)
+        albums = getattr(track, "albums", None) or []
+        album_id = (
+            albums[0].id
+            if albums
+            else getattr(item, "album_id", None)
+        )
+        if track_id is None or album_id is None:
+            return None
+        artists = ", ".join(
+            artist.name
+            for artist in (getattr(track, "artists", None) or [])
+            if artist.name
+        )
+        duration_ms = getattr(track, "duration_ms", None)
+        return TrackEntry(
+            track_id=str(track_id),
+            album_id=str(album_id),
+            title=getattr(track, "title", None) or "Без названия",
+            artists=artists,
+            duration_seconds=(
+                duration_ms / 1000
+                if duration_ms
+                else None
+            ),
+            url=(
+                f"https://music.yandex.ru/album/{album_id}"
+                f"/track/{track_id}"
+            ),
+        )
+
+    def get_collection_tracks(self, url: str) -> list[TrackEntry]:
+        """Получает список треков из альбома или плейлиста."""
+        parsed = urlparse(url)
+        client = self._get_client()
+        album_match = self.ALBUM_PATTERN.search(parsed.path)
+        playlist_uuid_match = self.PLAYLIST_UUID_PATTERN.search(urlparse(url).path)
+        playlist_match = self.PLAYLIST_PATTERN.search(parsed.path)
+        raw_tracks = []
+        if album_match:
+            album_id = album_match.group(1)
+            album = client.albums_with_tracks(album_id)
+            if album is None or not album.volumes:
+                raise RuntimeError("Не удалось получить альбом")
+            # В альбоме может быть несколько дисков.
+            for volume in album.volumes:
+                raw_tracks.extend(volume)
+                
+        elif playlist_uuid_match:
+            playlist_uuid = playlist_uuid_match.group(1)
+            playlist = client.playlist(playlist_uuid)
+            if playlist is None:
+                raise ValueError("Не удалось получить плейлист по UUID")
+            if playlist.tracks is None:
+                playlist.fetch_tracks()
+            raw_tracks = playlist.tracks or []
+        
+        elif playlist_match:
+            user_id, playlist_id = playlist_match.groups()
+            playlist = client.users_playlists(
+                kind=playlist_id,
+                user_id=user_id,
+            )
+            raw_tracks = playlist.tracks or []
+        else:
+            raise ValueError(
+                "Ссылка не является альбомом или плейлистом"
+            )
+        entries = []
+        for item in raw_tracks:
+            entry = self._make_track_entry(item)
+            if entry is not None:
+                entries.append(entry)
+        if not entries:
+            raise RuntimeError(
+                "В коллекции не найдено доступных треков"
+            )
+        return entries
 
     def download(
         self,

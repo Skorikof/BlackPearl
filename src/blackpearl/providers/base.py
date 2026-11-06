@@ -13,6 +13,16 @@ class MediaInfo:
     duration_seconds: float | None = None
 
 
+@dataclass
+class TrackEntry:
+    track_id: str
+    album_id: str
+    title: str
+    artists: str
+    duration_seconds: float | None
+    url: str
+
+
 ProgressCallback = Callable[[float], None]
 
 
