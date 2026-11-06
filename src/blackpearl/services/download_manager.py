@@ -12,6 +12,7 @@ class DownloadManager(QObject):
     completed = Signal()
     cancelled = Signal()
     error_occurred = Signal(str)
+    ready = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -66,3 +67,5 @@ class DownloadManager(QObject):
         self._worker = None
         self._thread = None
         self._cancel_event = None
+
+        self.ready.emit()

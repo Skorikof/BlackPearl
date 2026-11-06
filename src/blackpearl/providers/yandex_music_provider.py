@@ -23,6 +23,7 @@ from blackpearl.providers.base import MediaInfo, MediaProvider, TrackEntry
 class YandexMusicProvider(MediaProvider):
     """Провайдер для работы с Яндекс Музыкой."""
     TRACK_PATTERN = re.compile(r"/track/(\d+)")
+    TRACK_IN_ALBUM_PATTERN = re.compile(r"/album/(\d+)/track/(\d+)")
     ALBUM_PATTERN = re.compile(r"/album/(\d+)")
     PLAYLIST_PATTERN = re.compile(r"/users/([^/]+)/playlists/(\d+)")
     PLAYLIST_UUID_PATTERN = re.compile(r"/playlists/((?:lk\.)?[0-9a-fA-F]{8}-"
@@ -198,10 +199,7 @@ class YandexMusicProvider(MediaProvider):
                         data=cover,
                     )
                 )
-                print(
-                    f"Обложка добавлена: {image_format}, "
-                    f"{len(cover)} байт"
-                )
+                
             except Exception as error:
                 print(f"Ошибка обработки обложки: {error}")
             
@@ -327,11 +325,6 @@ class YandexMusicProvider(MediaProvider):
         actual_bitrate = self._select_bitrate(
             track,
             requested_bitrate,
-        )
-
-        print(
-            f"Выбран битрейт: {actual_bitrate} кбит/с "
-            f"(запрошено {requested_bitrate})"
         )
 
         track.download(
