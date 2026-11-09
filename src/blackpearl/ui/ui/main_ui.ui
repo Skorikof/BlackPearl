@@ -32,7 +32,7 @@
    </property>
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">
-     <number>0</number>
+     <number>5</number>
     </property>
     <property name="leftMargin">
      <number>0</number>
@@ -41,9 +41,6 @@
      <number>0</number>
     </property>
     <property name="rightMargin">
-     <number>0</number>
-    </property>
-    <property name="bottomMargin">
      <number>0</number>
     </property>
     <item>
@@ -305,22 +302,438 @@ background-color: rgba(255, 255, 255, 70);
      </widget>
     </item>
     <item>
-     <widget class="QFrame" name="frame">
-      <property name="maximumSize">
-       <size>
-        <width>16777215</width>
-        <height>16777215</height>
-       </size>
+     <widget class="QStackedWidget" name="stackedWidget">
+      <property name="currentIndex">
+       <number>0</number>
       </property>
-      <property name="styleSheet">
-       <string notr="true">background-color: rgba(255, 255, 255, 0);</string>
-      </property>
-      <property name="frameShape">
-       <enum>QFrame::Shape::StyledPanel</enum>
-      </property>
-      <property name="frameShadow">
-       <enum>QFrame::Shadow::Raised</enum>
-      </property>
+      <widget class="QWidget" name="audio_page">
+       <layout class="QVBoxLayout" name="verticalLayout_2">
+        <item>
+         <widget class="QLineEdit" name="audio_url_le">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>30</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>30</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <family>System</family>
+            <pointsize>12</pointsize>
+            <bold>true</bold>
+           </font>
+          </property>
+          <property name="styleSheet">
+           <string notr="true">color: white;
+background-color: rgba(255, 255, 255, 30);
+border: 1px solid rgba(255, 255, 255, 40);
+border-radius: 7px;
+</string>
+          </property>
+          <property name="text">
+           <string/>
+          </property>
+          <property name="placeholderText">
+           <string>Paste the link to the audio..</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QFrame" name="audio_btn_frame">
+          <property name="styleSheet">
+           <string notr="true">background-color: rgba(255, 255, 255, 0);
+border: 1px solid rgba(255, 255, 255, 0);
+border-radius: 7px;</string>
+          </property>
+          <layout class="QHBoxLayout" name="horizontalLayout_2">
+           <property name="spacing">
+            <number>10</number>
+           </property>
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>0</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>0</number>
+           </property>
+           <item>
+            <widget class="QPushButton" name="audio_check_btn">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>30</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>30</height>
+              </size>
+             </property>
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>12</pointsize>
+               <bold>true</bold>
+              </font>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">QPushButton {
+color: white;
+background-color: rgba(255, 255, 255, 30);
+border: 1px solid rgba(255, 255, 255, 40);
+border-radius: 7px;
+}
+
+QPushButton:hover {
+background-color: rgba(255, 255, 255, 40);
+}
+
+QPushButton:pressed {
+background-color: rgba(255, 255, 255, 70);
+}
+</string>
+             </property>
+             <property name="text">
+              <string>Check url</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QComboBox" name="audio_quality_cb">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>30</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>30</height>
+              </size>
+             </property>
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>12</pointsize>
+               <bold>true</bold>
+              </font>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">color: white;
+background-color: rgba(255, 255, 255, 30);
+border: 1px solid rgba(255, 255, 255, 40);
+border-radius: 7px;</string>
+             </property>
+             <property name="currentIndex">
+              <number>1</number>
+             </property>
+             <item>
+              <property name="text">
+               <string>128 kB/s</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>192 kB/s</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>320 kB/s</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="audio_download_btn">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>30</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>30</height>
+              </size>
+             </property>
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>12</pointsize>
+               <bold>true</bold>
+              </font>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">QPushButton {
+color: white;
+background-color: rgba(255, 255, 255, 30);
+border: 1px solid rgba(255, 255, 255, 40);
+border-radius: 7px;
+}
+
+QPushButton:hover {
+background-color: rgba(255, 255, 255, 40);
+}
+
+QPushButton:pressed {
+background-color: rgba(255, 255, 255, 70);
+}
+</string>
+             </property>
+             <property name="text">
+              <string>Download</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="audio_cancel_btn">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>30</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>30</height>
+              </size>
+             </property>
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>12</pointsize>
+               <bold>true</bold>
+              </font>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">QPushButton {
+color: white;
+background-color: rgba(255, 255, 255, 30);
+border: 1px solid rgba(255, 255, 255, 40);
+border-radius: 7px;
+}
+
+QPushButton:hover {
+background-color: rgba(255, 255, 255, 40);
+}
+
+QPushButton:pressed {
+background-color: rgba(255, 255, 255, 70);
+}
+</string>
+             </property>
+             <property name="text">
+              <string>Cancel</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QTableWidget" name="audio_tableWidget">
+          <property name="styleSheet">
+           <string notr="true">color: white;
+background-color: rgba(255, 255, 255, 30);
+border: 1px solid rgba(255, 255, 255, 40);
+border-radius: 7px;
+</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QFrame" name="audio_check_btn_frame">
+          <property name="styleSheet">
+           <string notr="true">background-color: rgba(255, 255, 255, 0);
+border: 1px solid rgba(255, 255, 255, 0);
+border-radius: 7px;
+</string>
+          </property>
+          <layout class="QHBoxLayout" name="horizontalLayout_3">
+           <property name="spacing">
+            <number>5</number>
+           </property>
+           <item>
+            <widget class="QPushButton" name="audio_check_all_btn">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>30</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>30</height>
+              </size>
+             </property>
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>12</pointsize>
+               <bold>true</bold>
+              </font>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">QPushButton {
+color: white;
+background-color: rgba(255, 255, 255, 30);
+border: 1px solid rgba(255, 255, 255, 40);
+border-radius: 7px;
+}
+
+QPushButton:hover {
+background-color: rgba(255, 255, 255, 40);
+}
+
+QPushButton:pressed {
+background-color: rgba(255, 255, 255, 70);
+}
+</string>
+             </property>
+             <property name="text">
+              <string>Check all</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="audio_remove_all_btn">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>30</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>30</height>
+              </size>
+             </property>
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>12</pointsize>
+               <bold>true</bold>
+              </font>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">QPushButton {
+color: white;
+background-color: rgba(255, 255, 255, 30);
+border: 1px solid rgba(255, 255, 255, 40);
+border-radius: 7px;
+}
+
+QPushButton:hover {
+background-color: rgba(255, 255, 255, 40);
+}
+
+QPushButton:pressed {
+background-color: rgba(255, 255, 255, 70);
+}
+</string>
+             </property>
+             <property name="text">
+              <string>Remove all</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QProgressBar" name="audio_progressBar">
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>12</pointsize>
+            <bold>true</bold>
+           </font>
+          </property>
+          <property name="value">
+           <number>24</number>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="audio_label">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>30</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>30</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>12</pointsize>
+            <bold>true</bold>
+           </font>
+          </property>
+          <property name="styleSheet">
+           <string notr="true">color: black;
+background-color: rgba(255, 255, 255, 30);
+border: 1px solid rgba(255, 255, 255, 40);
+border-radius: 7px;
+</string>
+          </property>
+          <property name="text">
+           <string>Waiting for link..</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="dev_page">
+       <layout class="QVBoxLayout" name="verticalLayout_3">
+        <item>
+         <widget class="QLabel" name="dev_label">
+          <property name="font">
+           <font>
+            <family>Arial Black</family>
+            <pointsize>14</pointsize>
+            <bold>true</bold>
+           </font>
+          </property>
+          <property name="styleSheet">
+           <string notr="true">color: white;
+background-color: rgba(255, 255, 255, 30);
+border: 1px solid rgba(255, 255, 255, 40);
+border-radius: 7px;</string>
+          </property>
+          <property name="text">
+           <string>Feature in development..</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignmentFlag::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
      </widget>
     </item>
    </layout>
