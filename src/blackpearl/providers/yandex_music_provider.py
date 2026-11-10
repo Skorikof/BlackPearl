@@ -30,6 +30,7 @@ class YandexMusicProvider(MediaProvider):
                                     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                                     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
                                     )
+    ARTIST_TRACKS_PATTERN = re.compile(r"^/artist/(\d+)/tracks/?$")
 
     def can_handle(self, url: str) -> bool:
         parsed = urlparse(url)
@@ -51,6 +52,7 @@ class YandexMusicProvider(MediaProvider):
                 self.ALBUM_PATTERN,
                 self.PLAYLIST_PATTERN,
                 self.PLAYLIST_UUID_PATTERN,
+                self.ARTIST_TRACKS_PATTERN,
             )
         )
 
@@ -246,13 +248,15 @@ class YandexMusicProvider(MediaProvider):
         )
 
     def get_collection_tracks(self, url: str) -> list[TrackEntry]:
-        """Получает список треков из альбома или плейлиста."""
+        """Получает список треков из альбома, плейлиста или страницы артиста."""
         parsed = urlparse(url)
         client = self._get_client()
-        album_match = self.ALBUM_PATTERN.search(parsed.path)
-        playlist_uuid_match = self.PLAYLIST_UUID_PATTERN.search(urlparse(url).path)
+        album_match = self.ALBUM_PATTERN.fullmatch(parsed.path)
+        artist_match = self.ARTIST_TRACKS_PATTERN.fullmatch(parsed.path)
+        playlist_uuid_match = self.PLAYLIST_UUID_PATTERN.search(parsed.path)
         playlist_match = self.PLAYLIST_PATTERN.search(parsed.path)
         raw_tracks = []
+
         if album_match:
             album_id = album_match.group(1)
             album = client.albums_with_tracks(album_id)
@@ -261,7 +265,46 @@ class YandexMusicProvider(MediaProvider):
             # В альбоме может быть несколько дисков.
             for volume in album.volumes:
                 raw_tracks.extend(volume)
-                
+
+        elif artist_match:
+            artist_id = artist_match.group(1)
+            page = 0
+            page_size = 100
+
+            # API возвращает треки исполнителя постранично.
+            while True:
+                artist_page = client.artists_tracks(
+                    artist_id,
+                    page=page,
+                    page_size=page_size,
+                )
+                if artist_page is None:
+                    break
+
+                page_tracks = artist_page.tracks or []
+                raw_tracks.extend(page_tracks)
+                if not page_tracks:
+                    break
+
+                pager = getattr(artist_page, "pager", None)
+                total = getattr(pager, "total", None) if pager is not None else None
+                if total is not None:
+                    current_page = getattr(pager, "page", page)
+                    per_page = getattr(pager, "per_page", page_size) or page_size
+                    if (current_page + 1) * per_page >= total:
+                        break
+                    next_page = current_page + 1
+                    if next_page <= page:
+                        raise RuntimeError(
+                            "Некорректная пагинация треков исполнителя"
+                        )
+                    page = next_page
+                else:
+                    # Запасной вариант, если API не вернул пагинатор.
+                    if len(page_tracks) < page_size:
+                        break
+                    page += 1
+
         elif playlist_uuid_match:
             playlist_uuid = playlist_uuid_match.group(1)
             playlist = client.playlist(playlist_uuid)
@@ -270,7 +313,7 @@ class YandexMusicProvider(MediaProvider):
             if playlist.tracks is None:
                 playlist.fetch_tracks()
             raw_tracks = playlist.tracks or []
-        
+
         elif playlist_match:
             user_id, playlist_id = playlist_match.groups()
             playlist = client.users_playlists(
@@ -280,8 +323,9 @@ class YandexMusicProvider(MediaProvider):
             raw_tracks = playlist.tracks or []
         else:
             raise ValueError(
-                "Ссылка не является альбомом или плейлистом"
+                "Ссылка не является альбомом, плейлистом или страницей треков артиста"
             )
+
         entries = []
         for item in raw_tracks:
             entry = self._make_track_entry(item)
