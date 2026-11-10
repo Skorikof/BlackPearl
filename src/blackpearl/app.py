@@ -2,7 +2,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from blackpearl.ui.main_window import MainWindow
+from blackpearl.ui.view import MainWindow
 
 
 def main() -> None:

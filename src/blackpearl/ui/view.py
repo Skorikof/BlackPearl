@@ -3,11 +3,8 @@ from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt, QThread, Slot
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QFileDialog,
-    QHeaderView,
     QMainWindow,
-    QTableWidgetItem,
 )
 
 from blackpearl.providers.base import TrackEntry
@@ -17,7 +14,8 @@ from blackpearl.providers.yt_dlp_provider import YtDlpProvider
 from blackpearl.services.collection_worker import CollectionWorker
 from blackpearl.services.download_manager import DownloadManager
 from blackpearl.services.info_worker import InfoWorker
-from blackpearl.ui.ui_py.main_win import Ui_MainWindow
+from blackpearl.ui.ui_py.main_ui import Ui_MainWindow
+from blackpearl.ui.widgets.audio_table import AudioTable
 
 
 class MainWindow(QMainWindow):
@@ -31,10 +29,10 @@ class MainWindow(QMainWindow):
         self._info_worker: InfoWorker | None = None
         self._collection_thread: QThread | None = None
         self._collection_worker: CollectionWorker | None = None
+        self._table = AudioTable(self.ui.audio_tableWidget)
 
         self._current_provider = None
         self._current_url = ""
-        # Each row corresponds to either a TrackEntry or a single-track URL.
         self._table_entries: list[TrackEntry | str] = []
 
         self._download_queue: list[TrackEntry | str] = []
@@ -52,33 +50,14 @@ class MainWindow(QMainWindow):
         self._connect_signals()
 
     def _configure_ui(self) -> None:
-        self.setWindowTitle("BlackPearl")
-        self.resize(900, 650)
-
-        # The generated form contains the widgets; configure their behaviour here.
-        table = self.ui.audio_tableWidget
-        table.setColumnCount(4)
-        table.setHorizontalHeaderLabels(
-            ["", "Исполнитель", "Название", "Длительность"]
-        )
-        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        table.setColumnWidth(0, 40)
-
-        self.ui.audio_progressBar.setRange(0, 100)
-        self.ui.audio_progressBar.setValue(0)
         self.ui.audio_download_btn.setEnabled(False)
         self.ui.audio_cancel_btn.setEnabled(False)
         self.ui.audio_check_all_btn.setEnabled(False)
         self.ui.audio_remove_all_btn.setEnabled(False)
 
-        # Store numeric bitrates as item data, not as display text.
         for index, bitrate in enumerate((128, 192, 320)):
             self.ui.audio_quality_cb.setItemData(index, bitrate)
-        self.ui.audio_quality_cb.setCurrentIndex(1)
+        self.ui.audio_quality_cb.setCurrentIndex(2)
 
         self.ui.stackedWidget.setCurrentWidget(self.ui.audio_page)
 
@@ -104,11 +83,11 @@ class MainWindow(QMainWindow):
         self.ui.audio_cancel_btn.clicked.connect(
             self.download_manager.cancel_download
         )
-        self.ui.audio_tableWidget.itemChanged.connect(
-            lambda _item: self._update_table_controls()
-        )
         self.ui.audio_check_all_btn.clicked.connect(self.select_all_tracks)
         self.ui.audio_remove_all_btn.clicked.connect(self.select_no_tracks)
+        self.ui.audio_tableWidget.itemChanged.connect(
+            self._update_table_controls
+        )
 
         self.download_manager.progress_changed.connect(self.update_progress)
         self.download_manager.completed.connect(self.download_completed)
@@ -121,51 +100,18 @@ class MainWindow(QMainWindow):
 
     def _clear_table(self) -> None:
         self._table_entries.clear()
-        self.ui.audio_tableWidget.setRowCount(0)
+        self._table.set_row_count(0)
         self.ui.audio_check_all_btn.setEnabled(False)
         self.ui.audio_remove_all_btn.setEnabled(False)
         self.ui.audio_download_btn.setEnabled(False)
 
-    def _add_table_row(
-        self,
-        row: int,
-        artist: str,
-        title: str,
-        duration_seconds: float | None,
-        checked: bool = True,
-    ) -> None:
-        checkbox = QTableWidgetItem()
-        checkbox.setFlags(
-            Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
-        )
-        checkbox.setCheckState(
-            Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
-        )
-        self.ui.audio_tableWidget.setItem(row, 0, checkbox)
-        self.ui.audio_tableWidget.setItem(row, 1, QTableWidgetItem(artist))
-        self.ui.audio_tableWidget.setItem(row, 2, QTableWidgetItem(title))
-
-        duration = ""
-        if duration_seconds is not None:
-            minutes, seconds = divmod(int(duration_seconds), 60)
-            duration = f"{minutes}:{seconds:02d}"
-        self.ui.audio_tableWidget.setItem(row, 3, QTableWidgetItem(duration))
-
     def _update_table_controls(self) -> None:
-        has_rows = self.ui.audio_tableWidget.rowCount() > 0
-        self.ui.audio_check_all_btn.setEnabled(has_rows)
-        self.ui.audio_remove_all_btn.setEnabled(has_rows)
-
-        has_selected = any(
-            self.ui.audio_tableWidget.item(row, 0) is not None
-            and self.ui.audio_tableWidget.item(row, 0).checkState()
-            == Qt.CheckState.Checked
-            for row in range(self.ui.audio_tableWidget.rowCount())
-        )
+        flag_all, has_selected = self._table.update_table_controls()
+        self.ui.audio_check_all_btn.setEnabled(flag_all)
+        self.ui.audio_remove_all_btn.setEnabled(flag_all)
         self.ui.audio_download_btn.setEnabled(has_selected)
 
     def check_url(self) -> None:
-        # Invalidate previous results immediately so an old list cannot be downloaded.
         self._clear_table()
         self._current_provider = None
         self._current_url = ""
@@ -216,10 +162,9 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def show_info(self, info) -> None:
-        # A single track is represented by exactly one checked table row.
         self._table_entries = [self._current_url]
-        self.ui.audio_tableWidget.setRowCount(1)
-        self._add_table_row(
+        self._table.set_row_count(1)
+        self._table.add_table_row(
             0,
             "",
             info.title,
@@ -263,11 +208,10 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def show_collection(self, tracks: list[TrackEntry]) -> None:
         self._table_entries = list(tracks)
-        table = self.ui.audio_tableWidget
-        table.setRowCount(len(tracks))
+        self._table.set_row_count(len(tracks))
 
         for row, track in enumerate(tracks):
-            self._add_table_row(
+            self._table.add_table_row(
                 row,
                 track.artists,
                 track.title,
@@ -284,15 +228,15 @@ class MainWindow(QMainWindow):
         self._collection_thread = None
 
     def select_all_tracks(self) -> None:
-        for row in range(self.ui.audio_tableWidget.rowCount()):
-            item = self.ui.audio_tableWidget.item(row, 0)
+        for row in range(self._table.get_row_count()):
+            item = self._table.get_item(row, 0)
             if item is not None:
                 item.setCheckState(Qt.CheckState.Checked)
         self._update_table_controls()
 
     def select_no_tracks(self) -> None:
-        for row in range(self.ui.audio_tableWidget.rowCount()):
-            item = self.ui.audio_tableWidget.item(row, 0)
+        for row in range(self._table.get_row_count()):
+            item = self._table.get_item(row, 0)
             if item is not None:
                 item.setCheckState(Qt.CheckState.Unchecked)
         self._update_table_controls()
@@ -311,9 +255,9 @@ class MainWindow(QMainWindow):
 
         self._download_queue = [
             self._table_entries[row]
-            for row in range(self.ui.audio_tableWidget.rowCount())
-            if self.ui.audio_tableWidget.item(row, 0) is not None
-            and self.ui.audio_tableWidget.item(row, 0).checkState()
+            for row in range(self._table.get_row_count())
+            if self._table.get_item(row, 0) is not None
+            and self._table.get_item(row, 0).checkState()
             == Qt.CheckState.Checked
         ]
         if not self._download_queue:

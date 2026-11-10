@@ -311,11 +311,14 @@ class Ui_MainWindow(object):
 
         self.audio_tableWidget = QTableWidget(self.audio_page)
         self.audio_tableWidget.setObjectName(u"audio_tableWidget")
+        self.audio_tableWidget.setFont(font2)
         self.audio_tableWidget.setStyleSheet(u"color: white;\n"
 "background-color: rgba(255, 255, 255, 30);\n"
 "border: 1px solid rgba(255, 255, 255, 40);\n"
 "border-radius: 7px;\n"
 "")
+        self.audio_tableWidget.horizontalHeader().setVisible(False)
+        self.audio_tableWidget.verticalHeader().setVisible(False)
 
         self.verticalLayout_2.addWidget(self.audio_tableWidget)
 
@@ -380,7 +383,8 @@ class Ui_MainWindow(object):
         self.audio_progressBar = QProgressBar(self.audio_page)
         self.audio_progressBar.setObjectName(u"audio_progressBar")
         self.audio_progressBar.setFont(font2)
-        self.audio_progressBar.setValue(24)
+        self.audio_progressBar.setValue(0)
+        self.audio_progressBar.setTextVisible(True)
 
         self.verticalLayout_2.addWidget(self.audio_progressBar)
 
