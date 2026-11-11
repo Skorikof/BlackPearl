@@ -430,7 +430,7 @@ class Ui_MainWindow(object):
         self.retranslateUi(MainWindow)
 
         self.stackedWidget.setCurrentIndex(0)
-        self.audio_quality_cb.setCurrentIndex(1)
+        self.audio_quality_cb.setCurrentIndex(2)
 
 
         QMetaObject.connectSlotsByName(MainWindow)

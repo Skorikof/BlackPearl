@@ -57,9 +57,6 @@ class MainWindow(QMainWindow):
 
         for index, bitrate in enumerate((128, 192, 320)):
             self.ui.audio_quality_cb.setItemData(index, bitrate)
-        self.ui.audio_quality_cb.setCurrentIndex(2)
-
-        self.ui.stackedWidget.setCurrentWidget(self.ui.audio_page)
 
     def _connect_signals(self) -> None:
         self.ui.main_audio_btn.clicked.connect(
