@@ -23,8 +23,9 @@ from blackpearl.providers.base import MediaInfo, MediaProvider, TrackEntry
 class YandexMusicProvider(MediaProvider):
     """Провайдер для работы с Яндекс Музыкой."""
     TRACK_PATTERN = re.compile(r"/track/(\d+)")
-    TRACK_IN_ALBUM_PATTERN = re.compile(r"/album/(\d+)/track/(\d+)")
     ALBUM_PATTERN = re.compile(r"/album/(\d+)")
+    # Ссылка на сам альбом (без трека), допускается слэш в конце.
+    ALBUM_ONLY_PATTERN = re.compile(r"^/album/(\d+)/?$")
     PLAYLIST_PATTERN = re.compile(r"/users/([^/]+)/playlists/(\d+)")
     PLAYLIST_UUID_PATTERN = re.compile(r"/playlists/((?:lk\.)?[0-9a-fA-F]{8}-"
                                     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -50,6 +51,22 @@ class YandexMusicProvider(MediaProvider):
             for pattern in (
                 self.TRACK_PATTERN,
                 self.ALBUM_PATTERN,
+                self.PLAYLIST_PATTERN,
+                self.PLAYLIST_UUID_PATTERN,
+                self.ARTIST_TRACKS_PATTERN,
+            )
+        )
+
+    def is_collection(self, url: str) -> bool:
+        """Проверяет, ведёт ли URL на коллекцию (альбом, плейлист,
+        треки артиста), а не на отдельный трек."""
+        path = urlparse(url).path
+        if self.TRACK_PATTERN.search(path):
+            return False
+        return any(
+            pattern.search(path)
+            for pattern in (
+                self.ALBUM_ONLY_PATTERN,
                 self.PLAYLIST_PATTERN,
                 self.PLAYLIST_UUID_PATTERN,
                 self.ARTIST_TRACKS_PATTERN,
@@ -251,7 +268,7 @@ class YandexMusicProvider(MediaProvider):
         """Получает список треков из альбома, плейлиста или страницы артиста."""
         parsed = urlparse(url)
         client = self._get_client()
-        album_match = self.ALBUM_PATTERN.fullmatch(parsed.path)
+        album_match = self.ALBUM_ONLY_PATTERN.fullmatch(parsed.path)
         artist_match = self.ARTIST_TRACKS_PATTERN.fullmatch(parsed.path)
         playlist_uuid_match = self.PLAYLIST_UUID_PATTERN.search(parsed.path)
         playlist_match = self.PLAYLIST_PATTERN.search(parsed.path)
@@ -310,9 +327,12 @@ class YandexMusicProvider(MediaProvider):
             playlist = client.playlist(playlist_uuid)
             if playlist is None:
                 raise ValueError("Не удалось получить плейлист по UUID")
-            if playlist.tracks is None:
-                playlist.fetch_tracks()
-            raw_tracks = playlist.tracks or []
+            raw_tracks = playlist.tracks
+            if raw_tracks is None:
+                # fetch_tracks() возвращает список треков,
+                # но не сохраняет его в playlist.tracks.
+                raw_tracks = playlist.fetch_tracks()
+            raw_tracks = raw_tracks or []
 
         elif playlist_match:
             user_id, playlist_id = playlist_match.groups()

@@ -1,7 +1,7 @@
 from pathlib import Path
-from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt, QThread, Slot
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QFileDialog,
     QMainWindow,
@@ -36,6 +36,10 @@ class MainWindow(QMainWindow):
         self._table_entries: list[TrackEntry | str] = []
 
         self._download_queue: list[TrackEntry | str] = []
+        # Провайдер очереди фиксируется при старте загрузки,
+        # чтобы новая проверка ссылки не могла его подменить.
+        self._download_provider = None
+        self._closing = False
         self._queue_total = 0
         self._queue_index = 0
         self._waiting_for_manager = False
@@ -108,7 +112,47 @@ class MainWindow(QMainWindow):
         self.ui.audio_remove_all_btn.setEnabled(flag_all)
         self.ui.audio_download_btn.setEnabled(has_selected)
 
+    def _set_downloading(self, downloading: bool) -> None:
+        """Переключает кнопки между режимом загрузки и ожидания."""
+        self.ui.audio_download_btn.setEnabled(not downloading)
+        self.ui.audio_cancel_btn.setEnabled(downloading)
+        self.ui.audio_check_btn.setEnabled(not downloading)
+
+    def _is_downloading(self) -> bool:
+        return bool(self._download_queue) or self.download_manager.is_busy
+
+    def _has_running_threads(self) -> bool:
+        return (
+            self._info_thread is not None
+            or self._collection_thread is not None
+            or self.download_manager.is_busy
+        )
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if not self._has_running_threads():
+            super().closeEvent(event)
+            return
+
+        # Нельзя уничтожать QThread, пока он работает: отменяем загрузку
+        # и закрываем окно, когда все фоновые потоки завершатся.
+        event.ignore()
+        if self._closing:
+            return
+        self._closing = True
+        self._download_queue.clear()
+        self.download_manager.cancel_download()
+        self.ui.centralwidget.setEnabled(False)
+        self._set_status("Завершаю фоновые операции...")
+
+    def _close_if_pending(self) -> None:
+        if self._closing and not self._has_running_threads():
+            self.close()
+
     def check_url(self) -> None:
+        if self._is_downloading():
+            self._set_status("Дождитесь окончания загрузки или отмените её")
+            return
+
         self._clear_table()
         self._current_provider = None
         self._current_url = ""
@@ -127,21 +171,12 @@ class MainWindow(QMainWindow):
         self._current_url = url
         self.ui.audio_check_btn.setEnabled(False)
 
-        if isinstance(provider, YandexMusicProvider):
-            path = urlparse(url).path
-            is_track = bool(
-                provider.TRACK_PATTERN.search(path)
-                or provider.TRACK_IN_ALBUM_PATTERN.search(path)
-            )
-            is_collection = bool(
-                provider.ALBUM_PATTERN.fullmatch(path)
-                or provider.PLAYLIST_PATTERN.search(path)
-                or provider.PLAYLIST_UUID_PATTERN.search(path)
-                or provider.ARTIST_TRACKS_PATTERN.fullmatch(path)
-            )
-            if is_collection and not is_track:
-                self.load_collection(provider, url)
-                return
+        if (
+            isinstance(provider, YandexMusicProvider)
+            and provider.is_collection(url)
+        ):
+            self.load_collection(provider, url)
+            return
 
         self._set_status("Получаю информацию...")
         self._info_thread = QThread(self)
@@ -178,8 +213,11 @@ class MainWindow(QMainWindow):
     @Slot()
     def _handle_info_thread_finished(self) -> None:
         self.ui.audio_check_btn.setEnabled(True)
+        if self._info_thread is not None:
+            self._info_thread.wait()
         self._info_worker = None
         self._info_thread = None
+        self._close_if_pending()
 
     def load_collection(self, provider: YandexMusicProvider, url: str) -> None:
         self._set_status("Получаю список треков...")
@@ -221,8 +259,11 @@ class MainWindow(QMainWindow):
     @Slot()
     def _handle_collection_thread_finished(self) -> None:
         self.ui.audio_check_btn.setEnabled(True)
+        if self._collection_thread is not None:
+            self._collection_thread.wait()
         self._collection_worker = None
         self._collection_thread = None
+        self._close_if_pending()
 
     def select_all_tracks(self) -> None:
         for row in range(self._table.get_row_count()):
@@ -261,11 +302,11 @@ class MainWindow(QMainWindow):
             self._set_status("Выбери хотя бы один трек")
             return
 
+        self._download_provider = self._current_provider
         self._queue_total = len(self._download_queue)
         self._queue_index = 0
         self._waiting_for_manager = False
-        self.ui.audio_download_btn.setEnabled(False)
-        self.ui.audio_cancel_btn.setEnabled(True)
+        self._set_downloading(True)
         self.ui.audio_progressBar.setValue(0)
         self._start_next_track()
 
@@ -287,15 +328,15 @@ class MainWindow(QMainWindow):
         )
         try:
             self.download_manager.start_download(
-                provider=self._current_provider,
+                provider=self._download_provider,
                 url=url,
                 output_dir=self._output_dir,
                 audio_bitrate_kbps=self.ui.audio_quality_cb.currentData(),
             )
         except RuntimeError as error:
+            self._download_queue.clear()
             self._set_status(str(error))
-            self.ui.audio_download_btn.setEnabled(True)
-            self.ui.audio_cancel_btn.setEnabled(False)
+            self._set_downloading(False)
 
     @Slot(float)
     def update_progress(self, percent: float) -> None:
@@ -312,6 +353,9 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _handle_download_manager_ready(self) -> None:
+        if self._closing:
+            self._close_if_pending()
+            return
         if not self._waiting_for_manager:
             return
         self._waiting_for_manager = False
@@ -323,22 +367,19 @@ class MainWindow(QMainWindow):
     def _finish_queue(self) -> None:
         self.ui.audio_progressBar.setValue(100)
         self._set_status(f"Загрузка завершена. Скачано треков: {self._queue_total}")
-        self.ui.audio_download_btn.setEnabled(True)
-        self.ui.audio_cancel_btn.setEnabled(False)
         self._download_queue.clear()
+        self._set_downloading(False)
 
     @Slot()
     def download_cancelled(self) -> None:
         self._waiting_for_manager = False
         self._download_queue.clear()
         self._set_status("Загрузка отменена")
-        self.ui.audio_download_btn.setEnabled(True)
-        self.ui.audio_cancel_btn.setEnabled(False)
+        self._set_downloading(False)
 
     @Slot(str)
     def download_error(self, message: str) -> None:
         self._waiting_for_manager = False
         self._download_queue.clear()
         self._set_status(f"Ошибка загрузки: {message}")
-        self.ui.audio_download_btn.setEnabled(True)
-        self.ui.audio_cancel_btn.setEnabled(False)
+        self._set_downloading(False)

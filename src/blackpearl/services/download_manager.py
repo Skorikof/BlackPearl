@@ -59,11 +59,20 @@ class DownloadManager(QObject):
 
         self._thread.start()
 
+    @property
+    def is_busy(self) -> bool:
+        """Есть ли сейчас работающий поток загрузки."""
+        return self._thread is not None
+
     def cancel_download(self) -> None:
         if self._cancel_event is not None:
             self._cancel_event.set()
 
     def _cleanup(self) -> None:
+        if self._thread is not None:
+            # finished испускается до фактического выхода из потока;
+            # дожидаемся его, чтобы поток можно было безопасно удалить.
+            self._thread.wait()
         self._worker = None
         self._thread = None
         self._cancel_event = None
