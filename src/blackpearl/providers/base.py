@@ -48,6 +48,25 @@ class TrackEntry:
 ProgressCallback = Callable[[float], None]
 
 
+class CollectionProvider(ABC):
+    """Источник, который умеет раскрывать ссылку на коллекцию
+    (альбом, плейлист и т. п.) в список отдельных треков.
+
+    Подмешивается к MediaProvider:
+    class MyProvider(MediaProvider, CollectionProvider).
+    """
+
+    @abstractmethod
+    def is_collection(self, url: str) -> bool:
+        """Ведёт ли URL на коллекцию, а не на отдельный трек."""
+        ...
+
+    @abstractmethod
+    def get_collection_tracks(self, url: str) -> list["TrackEntry"]:
+        """Возвращает треки коллекции. Вызывается в фоновом потоке."""
+        ...
+
+
 class MediaProvider(ABC):
     """Базовый интерфейс источника медиа."""
 

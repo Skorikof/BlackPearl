@@ -20,6 +20,7 @@ from yandex_music import Client
 from blackpearl.core.config import settings
 from blackpearl.core.filenames import sanitize_filename, unique_path
 from blackpearl.providers.base import (
+    CollectionProvider,
     DownloadCancelled,
     DownloadOptions,
     MediaInfo,
@@ -34,7 +35,7 @@ def _raise_if_cancelled(cancel_event: Event | None) -> None:
         raise DownloadCancelled("Загрузка отменена пользователем")
 
 
-class YandexMusicProvider(MediaProvider):
+class YandexMusicProvider(MediaProvider, CollectionProvider):
     """Провайдер для работы с Яндекс Музыкой."""
     supported_kinds = frozenset({"audio"})
     CHUNK_SIZE = 64 * 1024

@@ -9,11 +9,13 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from blackpearl.providers.base import (
+    CollectionProvider,
     DownloadCancelled,
     MediaInfo,
     MediaProvider,
     TrackEntry,
 )
+from blackpearl.providers.registry import ProviderRegistry
 from blackpearl.ui import view
 from blackpearl.ui.view import MainWindow
 
@@ -250,3 +252,87 @@ def test_manual_check_still_updates_buttons(window):
     window._table.get_item(2, 0).setCheckState(Qt.CheckState.Checked)
 
     assert window.ui.audio_download_btn.isEnabled()
+
+
+class FakeCollectionProvider(FlakyProvider, CollectionProvider):
+    """Провайдер коллекций без привязки к Яндексу."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.collection_requests = []
+
+    def is_collection(self, url: str) -> bool:
+        return "/album/" in url
+
+    def get_collection_tracks(self, url: str):
+        self.collection_requests.append(url)
+        return make_tracks(3)
+
+
+def use_only(window: MainWindow, provider: MediaProvider) -> None:
+    window.registry = ProviderRegistry()
+    window.registry.register(provider)
+
+
+def test_check_url_loads_collection_from_any_collection_provider(window):
+    provider = FakeCollectionProvider()
+    use_only(window, provider)
+    window.ui.audio_url_le.setText("https://example.com/album/1")
+
+    window.check_url()
+    assert not window.ui.audio_check_btn.isEnabled()
+    wait_until(lambda: window.ui.audio_check_btn.isEnabled())
+
+    assert provider.collection_requests == ["https://example.com/album/1"]
+    assert window._table.get_row_count() == 3
+    assert window.ui.audio_label.text() == "Найдено треков: 3"
+
+
+def test_check_url_gets_info_for_single_media(window):
+    provider = FakeCollectionProvider()
+    use_only(window, provider)
+    window.ui.audio_url_le.setText("https://example.com/track/1")
+
+    window.check_url()
+    wait_until(lambda: window.ui.audio_check_btn.isEnabled())
+
+    assert provider.collection_requests == []
+    assert window._table.get_row_count() == 1
+    assert window.ui.audio_label.text() == "Найдено: Media"
+
+
+def test_check_url_shows_lookup_error(window):
+    class BrokenProvider(FlakyProvider):
+        def get_info(self, url):
+            raise RuntimeError("видео недоступно")
+
+    use_only(window, BrokenProvider())
+    window.ui.audio_url_le.setText("https://example.com/video")
+
+    window.check_url()
+    wait_until(lambda: window.ui.audio_check_btn.isEnabled())
+
+    assert window.ui.audio_label.text() == (
+        "Не удалось получить информацию: видео недоступно"
+    )
+    assert window._table.get_row_count() == 0
+
+
+def test_close_during_lookup_waits_for_it(window):
+    release = threading.Event()
+
+    class SlowProvider(FlakyProvider):
+        def get_info(self, url):
+            release.wait(5)
+            return super().get_info(url)
+
+    use_only(window, SlowProvider())
+    window.ui.audio_url_le.setText("https://example.com/video")
+    window.check_url()
+
+    window.close()
+    assert window.isVisible()
+
+    release.set()
+    wait_until(lambda: not window.isVisible())
+    assert not window._lookup.is_running

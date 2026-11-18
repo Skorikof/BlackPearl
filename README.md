@@ -139,18 +139,18 @@ BlackPearl/
 │       │   ├── yandex_music_provider.py
 │       │   └── yt_dlp_provider.py
 │       ├── services/
-│       │   ├── collection_worker.py
+│       │   ├── background.py
 │       │   ├── download_manager.py
-│       │   ├── download_worker.py
-│       │   └── info_worker.py
+│       │   └── download_worker.py
 │       └── ui/
-│           ├── main_window.py
+│           ├── view.py
 │           ├── ui/
 │           │   └── main_ui.ui
-│           └── ui_py/
-│               └── main_win.py
+│           ├── ui_py/
+│           │   └── main_ui.py
+│           └── widgets/
+│               └── audio_table.py
 ├── tests/
-├── assets/
 ├── .env.example
 ├── .gitignore
 ├── pyproject.toml
@@ -165,24 +165,28 @@ BlackPearl/
 
 - `can_handle()` — проверяет, может ли провайдер обработать ссылку;
 - `get_info()` — получает информацию о медиа;
-- `download()` — загружает медиа.
+- `download()` — загружает медиа с параметрами `DownloadOptions` (аудио или видео, битрейт, максимальная высота видео); при отмене бросает `DownloadCancelled`;
+- `supported_kinds` — какие режимы (`audio`, `video`) поддерживает источник.
 
-`ProviderRegistry` хранит зарегистрированные провайдеры и выбирает подходящий для ссылки.
+Провайдеры, умеющие работать с коллекциями (альбомы, плейлисты), дополнительно реализуют `CollectionProvider`: `is_collection()` и `get_collection_tracks()`.
+
+`ProviderRegistry` хранит зарегистрированные провайдеры и выбирает подходящий для ссылки и режима скачивания.
 
 ### Services
 
 Сервисный слой выполняет длительные операции отдельно от GUI:
 
-- `InfoWorker` — получение информации об отдельном медиа;
-- `CollectionWorker` — получение списка треков коллекции;
-- `DownloadWorker` — загрузка одного элемента;
-- `DownloadManager` — управление последовательной очередью загрузок, сигналами прогресса, завершения, ошибки и отмены.
+- `BackgroundTask` — выполняет функцию в фоновом потоке и возвращает результат или ошибку в главный поток (проверка ссылки, получение списка треков);
+- `start_in_thread()` — общая обвязка запуска воркера в `QThread`;
+- `DownloadQueueWorker` — последовательно скачивает очередь; ошибка одного трека не останавливает очередь;
+- `DownloadManager` — запускает и отменяет очередь, сообщает о начале трека, общем прогрессе и итоге (`DownloadSummary`).
 
 ### UI
 
-- `main_window.py` связывает форму, провайдеры и сервисный слой.
+- `view.py` — главное окно: связывает форму, провайдеры и сервисный слой.
+- `widgets/audio_table.py` — таблица треков.
 - `ui/main_ui.ui` — исходная форма Qt Designer.
-- `ui_py/main_win.py` — Python-код, сгенерированный из `.ui`-формы.
+- `ui_py/main_ui.py` — Python-код, сгенерированный из `.ui`-формы.
 
 ## Тестирование
 

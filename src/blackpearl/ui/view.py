@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Slot
+from PySide6.QtCore import Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -8,14 +8,17 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from blackpearl.providers.base import DownloadOptions, TrackEntry
+from blackpearl.providers.base import (
+    CollectionProvider,
+    DownloadOptions,
+    TrackEntry,
+)
 from blackpearl.providers.registry import ProviderRegistry
 from blackpearl.providers.yandex_music_provider import YandexMusicProvider
 from blackpearl.providers.yt_dlp_provider import YtDlpProvider
-from blackpearl.services.collection_worker import CollectionWorker
+from blackpearl.services.background import BackgroundTask
 from blackpearl.services.download_manager import DownloadManager
 from blackpearl.services.download_worker import DownloadJob, DownloadSummary
-from blackpearl.services.info_worker import InfoWorker
 from blackpearl.ui.ui_py.main_ui import Ui_MainWindow
 from blackpearl.ui.widgets.audio_table import AudioTable
 
@@ -30,10 +33,8 @@ class MainWindow(QMainWindow):
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
 
-        self._info_thread: QThread | None = None
-        self._info_worker: InfoWorker | None = None
-        self._collection_thread: QThread | None = None
-        self._collection_worker: CollectionWorker | None = None
+        # Проверка ссылки: информация о медиа или список треков коллекции.
+        self._lookup = BackgroundTask(self)
         self._table = AudioTable(self.ui.audio_tableWidget)
 
         self._current_provider = None
@@ -88,6 +89,7 @@ class MainWindow(QMainWindow):
         self.download_manager.track_started.connect(self._on_track_started)
         self.download_manager.progress_changed.connect(self.update_progress)
         self.download_manager.finished.connect(self._on_download_finished)
+        self._lookup.finished.connect(self._on_lookup_finished)
 
     def _set_status(self, message: str) -> None:
         self.ui.audio_label.setText(message)
@@ -117,8 +119,7 @@ class MainWindow(QMainWindow):
 
     def _has_running_threads(self) -> bool:
         return (
-            self._info_thread is not None
-            or self._collection_thread is not None
+            self._lookup.is_running
             or self.download_manager.is_busy
         )
 
@@ -165,25 +166,22 @@ class MainWindow(QMainWindow):
         self.ui.audio_check_btn.setEnabled(False)
 
         if (
-            isinstance(provider, YandexMusicProvider)
+            isinstance(provider, CollectionProvider)
             and provider.is_collection(url)
         ):
-            self.load_collection(provider, url)
-            return
-
-        self._set_status("Получаю информацию...")
-        self._info_thread = QThread(self)
-        self._info_worker = InfoWorker(provider, url)
-        self._info_worker.moveToThread(self._info_thread)
-
-        self._info_thread.started.connect(self._info_worker.run)
-        self._info_worker.info_ready.connect(self.show_info)
-        self._info_worker.error_occurred.connect(self.show_error)
-        self._info_worker.finished.connect(self._info_thread.quit)
-        self._info_worker.finished.connect(self._info_worker.deleteLater)
-        self._info_thread.finished.connect(self._info_thread.deleteLater)
-        self._info_thread.finished.connect(self._handle_info_thread_finished)
-        self._info_thread.start()
+            self._set_status("Получаю список треков...")
+            self._lookup.start(
+                lambda: provider.get_collection_tracks(url),
+                on_success=self.show_collection,
+                on_error=self.show_error,
+            )
+        else:
+            self._set_status("Получаю информацию...")
+            self._lookup.start(
+                lambda: provider.get_info(url),
+                on_success=self.show_info,
+                on_error=self.show_error,
+            )
 
     @Slot(object)
     def show_info(self, info) -> None:
@@ -205,34 +203,9 @@ class MainWindow(QMainWindow):
         self._set_status(f"Не удалось получить информацию: {message}")
 
     @Slot()
-    def _handle_info_thread_finished(self) -> None:
+    def _on_lookup_finished(self) -> None:
         self.ui.audio_check_btn.setEnabled(True)
-        if self._info_thread is not None:
-            self._info_thread.wait()
-        self._info_worker = None
-        self._info_thread = None
         self._close_if_pending()
-
-    def load_collection(self, provider: YandexMusicProvider, url: str) -> None:
-        self._set_status("Получаю список треков...")
-        self._collection_thread = QThread(self)
-        self._collection_worker = CollectionWorker(provider, url)
-        self._collection_worker.moveToThread(self._collection_thread)
-
-        self._collection_thread.started.connect(self._collection_worker.run)
-        self._collection_worker.tracks_ready.connect(self.show_collection)
-        self._collection_worker.error_occurred.connect(self.show_error)
-        self._collection_worker.finished.connect(self._collection_thread.quit)
-        self._collection_worker.finished.connect(
-            self._collection_worker.deleteLater
-        )
-        self._collection_thread.finished.connect(
-            self._collection_thread.deleteLater
-        )
-        self._collection_thread.finished.connect(
-            self._handle_collection_thread_finished
-        )
-        self._collection_thread.start()
 
     @Slot(object)
     def show_collection(self, tracks: list[TrackEntry]) -> None:
@@ -251,15 +224,6 @@ class MainWindow(QMainWindow):
 
         self._update_table_controls()
         self._set_status(f"Найдено треков: {len(tracks)}")
-
-    @Slot()
-    def _handle_collection_thread_finished(self) -> None:
-        self.ui.audio_check_btn.setEnabled(True)
-        if self._collection_thread is not None:
-            self._collection_thread.wait()
-        self._collection_worker = None
-        self._collection_thread = None
-        self._close_if_pending()
 
     def select_all_tracks(self) -> None:
         self._table.set_all_checked(True)

@@ -4,6 +4,7 @@ from threading import Event
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from blackpearl.providers.base import DownloadOptions, MediaProvider
+from blackpearl.services.background import start_in_thread
 from blackpearl.services.download_worker import (
     DownloadJob,
     DownloadQueueWorker,
@@ -50,7 +51,6 @@ class DownloadManager(QObject):
 
         self._cancel_event = Event()
         self._summary = None
-        self._thread = QThread(self)
         self._worker = DownloadQueueWorker(
             provider=provider,
             jobs=jobs,
@@ -58,21 +58,11 @@ class DownloadManager(QObject):
             options=options,
             cancel_event=self._cancel_event,
         )
-        self._worker.moveToThread(self._thread)
-
-        self._thread.started.connect(self._worker.run)
-
         self._worker.track_started.connect(self.track_started)
         self._worker.progress_changed.connect(self.progress_changed)
         self._worker.queue_finished.connect(self._store_summary)
 
-        self._worker.finished.connect(self._thread.quit)
-        self._worker.finished.connect(self._worker.deleteLater)
-
-        self._thread.finished.connect(self._thread.deleteLater)
-        self._thread.finished.connect(self._cleanup)
-
-        self._thread.start()
+        self._thread = start_in_thread(self._worker, self, self._cleanup)
 
     def cancel(self) -> None:
         if self._cancel_event is not None:
