@@ -1,7 +1,7 @@
 import re
 from io import BytesIO
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 from urllib.parse import urlparse
 
 from mutagen.id3 import (
@@ -18,6 +18,7 @@ from PIL import Image
 from yandex_music import Client
 
 from blackpearl.core.config import settings
+from blackpearl.core.filenames import sanitize_filename, unique_path
 from blackpearl.providers.base import (
     DownloadOptions,
     MediaInfo,
@@ -33,6 +34,11 @@ class YandexMusicProvider(MediaProvider):
     CHUNK_SIZE = 64 * 1024
     # (подключение, ожидание очередной порции данных), секунды.
     HTTP_TIMEOUT = (10, 30)
+
+    def __init__(self) -> None:
+        self._client: Client | None = None
+        self._client_token: str | None = None
+        self._client_lock = Lock()
 
     TRACK_PATTERN = re.compile(r"/track/(\d+)")
     ALBUM_PATTERN = re.compile(r"/album/(\d+)")
@@ -101,12 +107,22 @@ class YandexMusicProvider(MediaProvider):
         return track_id, album_id
 
     def _get_client(self) -> Client:
-        """Создаёт и возвращает экземпляр клиента Yandex Music."""
-        if not settings.yandex_music_token:
+        """Возвращает клиент Yandex Music, создавая его при первом обращении.
+
+        Client.init() — отдельный сетевой запрос, поэтому клиент
+        создаётся один раз и переиспользуется. Провайдер вызывается
+        из разных фоновых потоков, поэтому создание защищено блокировкой.
+        """
+        token = settings.yandex_music_token
+        if not token:
             raise RuntimeError(
                 "Не задан YANDEX_MUSIC_TOKEN"
             )
-        return Client(settings.yandex_music_token).init()
+        with self._client_lock:
+            if self._client is None or self._client_token != token:
+                self._client = Client(token).init()
+                self._client_token = token
+            return self._client
 
     def _get_track(self, url: str):
         """Получает объект трека по URL."""
@@ -429,13 +445,10 @@ class YandexMusicProvider(MediaProvider):
             if artist.name
         )
         title = track.title or "Без названия"
-        filename = f"{artists} — {title}" if artists else title
-        filename = re.sub(
-            r'[<>:"/\\|?*\x00-\x1f]',
-            "_",
-            filename,
+        filename = sanitize_filename(
+            f"{artists} — {title}" if artists else title
         )
-        output_path = output_dir / f"{filename}.mp3"
+        output_path = unique_path(output_dir, filename, ".mp3")
         # Пока файл не скачан и не размечен тегами, он лежит
         # под временным именем — недокачанных .mp3 не остаётся.
         part_path = output_path.with_name(output_path.name + ".part")

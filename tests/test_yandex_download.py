@@ -232,3 +232,92 @@ def test_select_download_info_without_mp3_fails():
 
     with pytest.raises(RuntimeError, match="MP3"):
         YandexMusicProvider()._select_download_info(track, 192)
+
+
+def test_download_does_not_overwrite_track_with_same_name(
+    provider, http, tmp_path, monkeypatch
+):
+    existing = tmp_path / "Artist — Song.mp3"
+    existing.write_bytes(b"old")
+    monkeypatch.setattr(
+        provider, "_get_track", lambda url: make_track(FakeDownloadInfo(192))
+    )
+
+    provider.download(TRACK_URL, tmp_path, DownloadOptions())
+
+    assert existing.read_bytes() == b"old"
+    assert (tmp_path / "Artist — Song (2).mp3").read_bytes() == b"".join(CHUNKS)
+
+
+def test_download_sanitizes_windows_unsafe_title(
+    provider, http, tmp_path, monkeypatch
+):
+    track = make_track(FakeDownloadInfo(192))
+    track.title = "What?."
+    track.artists = []
+    monkeypatch.setattr(provider, "_get_track", lambda url: track)
+
+    provider.download(TRACK_URL, tmp_path, DownloadOptions())
+
+    assert [path.name for path in tmp_path.iterdir()] == ["What_.mp3"]
+
+
+class CountingClient:
+    instances = 0
+
+    def __init__(self, token):
+        CountingClient.instances += 1
+        self.token = token
+
+    def init(self):
+        return self
+
+
+def test_client_is_created_once_and_reused(monkeypatch):
+    CountingClient.instances = 0
+    monkeypatch.setattr(yandex_music_provider, "Client", CountingClient)
+    monkeypatch.setattr(
+        yandex_music_provider,
+        "settings",
+        SimpleNamespace(yandex_music_token="token-1"),
+    )
+    provider = YandexMusicProvider()
+
+    first = provider._get_client()
+    second = provider._get_client()
+
+    assert first is second
+    assert CountingClient.instances == 1
+
+
+def test_client_is_recreated_when_token_changes(monkeypatch):
+    CountingClient.instances = 0
+    monkeypatch.setattr(yandex_music_provider, "Client", CountingClient)
+    monkeypatch.setattr(
+        yandex_music_provider,
+        "settings",
+        SimpleNamespace(yandex_music_token="token-1"),
+    )
+    provider = YandexMusicProvider()
+    first = provider._get_client()
+
+    monkeypatch.setattr(
+        yandex_music_provider,
+        "settings",
+        SimpleNamespace(yandex_music_token="token-2"),
+    )
+    second = provider._get_client()
+
+    assert second is not first
+    assert second.token == "token-2"
+
+
+def test_client_requires_token(monkeypatch):
+    monkeypatch.setattr(
+        yandex_music_provider,
+        "settings",
+        SimpleNamespace(yandex_music_token=""),
+    )
+
+    with pytest.raises(RuntimeError, match="YANDEX_MUSIC_TOKEN"):
+        YandexMusicProvider()._get_client()

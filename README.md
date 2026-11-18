@@ -131,7 +131,8 @@ BlackPearl/
 │       ├── app.py
 │       ├── core/
 │       │   ├── config.py
-│       │   └── ffmpeg.py
+│       │   ├── ffmpeg.py
+│       │   └── filenames.py
 │       ├── providers/
 │       │   ├── base.py
 │       │   ├── registry.py
