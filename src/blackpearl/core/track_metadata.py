@@ -7,7 +7,10 @@ TrackMetadata, а дальше путь к файлу и теги строятс
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from typing import Literal
+
 from mutagen import MutagenError
+from mutagen.flac import FLAC, Picture
 from mutagen.id3 import (
     APIC,
     ID3,
@@ -24,6 +27,9 @@ from mutagen.id3 import (
 )
 
 from blackpearl.core.filenames import sanitize_filename
+
+AudioFormat = Literal["mp3", "flac"]
+SUFFIXES: dict[str, str] = {"mp3": ".mp3", "flac": ".flac"}
 
 VARIOUS_ARTISTS = "Various Artists"
 # Имя пользовательского тега, в котором хранится ID трека в источнике.
@@ -99,14 +105,19 @@ def library_location(
 
 
 def read_source_id(path: Path) -> str | None:
-    """Читает ID трека из тегов файла; None, если его нет или файл не читается."""
+    """Читает ID трека из тегов MP3 или FLAC.
+
+    None, если тега нет или файл не читается.
+    """
     try:
-        frames = ID3(path).getall(f"TXXX:{SOURCE_ID_TAG}")
+        if path.suffix.lower() == ".flac":
+            values = FLAC(path).get(SOURCE_ID_TAG) or []
+        else:
+            frames = ID3(path).getall(f"TXXX:{SOURCE_ID_TAG}")
+            values = frames[0].text if frames else []
     except (ID3NoHeaderError, MutagenError, OSError):
         return None
-    if not frames or not frames[0].text:
-        return None
-    return str(frames[0].text[0])
+    return str(values[0]) if values else None
 
 
 def resolve_target(
@@ -132,6 +143,60 @@ def resolve_target(
         if read_source_id(path) == source_id:
             return path, True
         number += 1
+
+
+def write_tags(
+    path: Path,
+    metadata: TrackMetadata,
+    audio_format: AudioFormat,
+    cover: tuple[bytes, str] | None = None,
+) -> None:
+    """Записывает теги в файл указанного формата.
+
+    Формат передаётся явно: во время загрузки файл называется *.part.
+    """
+    if audio_format == "flac":
+        write_flac_tags(path, metadata, cover)
+    else:
+        write_id3_tags(path, metadata, cover)
+
+
+def write_flac_tags(
+    path: Path,
+    metadata: TrackMetadata,
+    cover: tuple[bytes, str] | None = None,
+) -> None:
+    """Записывает Vorbis-комментарии и обложку в FLAC."""
+    audio = FLAC(path)
+
+    audio["TITLE"] = metadata.title
+    if metadata.artists:
+        audio["ARTIST"] = metadata.artists
+    if metadata.album_title:
+        audio["ALBUM"] = metadata.album_title
+    if metadata.album_artist:
+        audio["ALBUMARTIST"] = metadata.album_artist
+    if metadata.year:
+        audio["DATE"] = str(metadata.year)
+    if metadata.genre:
+        audio["GENRE"] = metadata.genre
+    if metadata.track_number:
+        audio["TRACKNUMBER"] = str(metadata.track_number)
+    if metadata.disc_number:
+        audio["DISCNUMBER"] = str(metadata.disc_number)
+    audio[SOURCE_ID_TAG] = metadata.source_id
+
+    if cover is not None:
+        data, mime = cover
+        picture = Picture()
+        picture.type = 3  # обложка (front cover)
+        picture.mime = mime
+        picture.desc = "Cover"
+        picture.data = data
+        audio.clear_pictures()
+        audio.add_picture(picture)
+
+    audio.save()
 
 
 def write_id3_tags(

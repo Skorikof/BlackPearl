@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 
 from blackpearl.core.track_metadata import (
@@ -12,6 +13,7 @@ from blackpearl.core.track_metadata import (
     read_source_id,
     resolve_target,
     write_id3_tags,
+    write_tags,
 )
 
 OUT = Path("out")
@@ -195,3 +197,64 @@ def test_resolve_target_finds_same_track_under_numbered_name(tmp_path):
     write_id3_tags(same, TrackMetadata(source_id="yandex:1", title="Song"))
 
     assert resolve_target(tmp_path, "Song", ".mp3", "yandex:1") == (same, True)
+
+
+def make_flac(path: Path) -> Path:
+    """Минимальный корректный FLAC: сигнатура и блок STREAMINFO."""
+    stream_params = ((44100 << 44) | (1 << 41) | (15 << 36)).to_bytes(8, "big")
+    streaminfo = (4096).to_bytes(2, "big") * 2 + bytes(6) + stream_params + bytes(16)
+    path.write_bytes(b"fLaC" + bytes([0x80, 0, 0, len(streaminfo)]) + streaminfo)
+    return path
+
+
+def test_write_and_read_flac_tags(tmp_path):
+    path = make_flac(tmp_path / "song.flac")
+
+    write_tags(
+        path, ALBUM_TRACK, "flac", cover=(b"\xff\xd8jpeg", "image/jpeg")
+    )
+
+    audio = FLAC(path)
+    assert audio["TITLE"] == ["Numb"]
+    assert audio["ARTIST"] == ["Linkin Park"]
+    assert audio["ALBUM"] == ["Meteora"]
+    assert audio["ALBUMARTIST"] == ["Linkin Park"]
+    assert audio["DATE"] == ["2003"]
+    assert audio["GENRE"] == ["rock"]
+    assert audio["TRACKNUMBER"] == ["13"]
+    assert audio["DISCNUMBER"] == ["1"]
+    assert audio.pictures[0].data == b"\xff\xd8jpeg"
+    assert audio.pictures[0].type == 3
+    assert read_source_id(path) == "yandex:1"
+
+
+def test_flac_tags_written_to_part_file_by_explicit_format(tmp_path):
+    # Во время загрузки файл называется *.flac.part — формат задаётся явно.
+    part = make_flac(tmp_path / "song.flac.part")
+
+    write_tags(part, TrackMetadata(source_id="yandex:7", title="T"), "flac")
+    final = part.replace(tmp_path / "song.flac")
+
+    assert read_source_id(final) == "yandex:7"
+
+
+def test_write_tags_mp3_dispatch(tmp_path):
+    path = make_mp3(tmp_path / "song.mp3.part")
+
+    write_tags(path, TrackMetadata(source_id="yandex:8", title="T"), "mp3")
+
+    assert ID3(path)["TIT2"].text == ["T"]
+
+
+def test_read_source_id_of_broken_flac(tmp_path):
+    path = tmp_path / "broken.flac"
+    path.write_bytes(b"not a flac")
+
+    assert read_source_id(path) is None
+
+
+def test_resolve_target_finds_flac_by_id(tmp_path):
+    path = make_flac(tmp_path / "Song.flac")
+    write_tags(path, TrackMetadata(source_id="yandex:1", title="Song"), "flac")
+
+    assert resolve_target(tmp_path, "Song", ".flac", "yandex:1") == (path, True)

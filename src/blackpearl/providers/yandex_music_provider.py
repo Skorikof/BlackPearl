@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from threading import Event, Lock
@@ -12,11 +13,13 @@ from yandex_music import Client
 
 from blackpearl.core.config import settings
 from blackpearl.core.track_metadata import (
+    SUFFIXES,
     VARIOUS_ARTISTS,
+    AudioFormat,
     TrackMetadata,
     library_location,
     resolve_target,
-    write_id3_tags,
+    write_tags,
 )
 from blackpearl.providers.base import (
     CollectionProvider,
@@ -43,6 +46,46 @@ def _artist_names(artists) -> list[str]:
 def _with_version(title: str, version: str | None) -> str:
     """«Song» + «Remastered 2011» → «Song (Remastered 2011)»."""
     return f"{title} ({version})" if version else title
+
+
+# Кодеки, которые просим у get-file-info в режиме lossless. Сервер
+# отдаёт FLAC, если он есть, иначе лучший MP3 — поэтому треки
+# без lossless-версии тоже скачиваются.
+LOSSLESS_CODECS = ["flac", "mp3"]
+
+
+@dataclass(frozen=True)
+class AudioSource:
+    """Откуда и в каком формате скачивать файл."""
+
+    url: str
+    audio_format: AudioFormat
+    # Ключ AES (hex) для зашифрованной доставки (transport=encraw).
+    key: str | None = None
+    proxies: dict | None = None
+
+
+def _client_proxies(client) -> dict | None:
+    return getattr(getattr(client, "request", None), "proxies", None)
+
+
+def _make_decryptor(key: str):
+    """Потоковый расшифровщик AES-128-CTR с нулевым счётчиком —
+    так шифруются файлы с transport=encraw (см. yandex_music.utils.decrypt).
+    """
+    try:
+        from cryptography.hazmat.primitives.ciphers import (
+            Cipher,
+            algorithms,
+            modes,
+        )
+    except ImportError as error:
+        raise RuntimeError(
+            "Для загрузки в lossless нужен пакет cryptography: "
+            "uv add cryptography"
+        ) from error
+    cipher = Cipher(algorithms.AES(bytes.fromhex(key)), modes.CTR(bytes(16)))
+    return cipher.decryptor()
 
 
 def _raise_if_cancelled(cancel_event: Event | None) -> None:
@@ -219,13 +262,16 @@ class YandexMusicProvider(MediaProvider, CollectionProvider):
         proxies: dict | None,
         progress_callback: ProgressCallback | None,
         cancel_event: Event | None,
+        key: str | None = None,
     ) -> None:
         """Скачивает файл по прямой ссылке порциями.
 
         Библиотека yandex-music скачивает файл целиком одним запросом,
         без прогресса и возможности отмены, поэтому сам файл
         загружаем сами. При отмене бросает DownloadCancelled.
+        Если передан key, файл расшифровывается на лету.
         """
+        decryptor = _make_decryptor(key) if key else None
         with requests.get(
             direct_link,
             stream=True,
@@ -242,10 +288,53 @@ class YandexMusicProvider(MediaProvider, CollectionProvider):
             with output_path.open("wb") as file:
                 for chunk in response.iter_content(self.CHUNK_SIZE):
                     _raise_if_cancelled(cancel_event)
-                    file.write(chunk)
+                    file.write(
+                        decryptor.update(chunk) if decryptor else chunk
+                    )
                     downloaded += len(chunk)
                     if total and progress_callback is not None:
                         progress_callback(min(downloaded / total * 100, 100.0))
+                if decryptor is not None:
+                    file.write(decryptor.finalize())
+
+    def _get_source(self, track, options: DownloadOptions) -> AudioSource:
+        """Выбирает файл для загрузки: MP3 нужного битрейта или lossless."""
+        if options.lossless:
+            return self._get_lossless_source(track)
+
+        download_info = self._select_download_info(
+            track,
+            options.audio_bitrate_kbps,
+        )
+        # Прямая ссылка действует около минуты — получаем её
+        # непосредственно перед загрузкой.
+        return AudioSource(
+            url=download_info.get_direct_link(),
+            audio_format="mp3",
+            proxies=_client_proxies(download_info.client),
+        )
+
+    @staticmethod
+    def _get_lossless_source(track) -> AudioSource:
+        file_info = track.get_file_info(
+            quality="lossless",
+            codecs=LOSSLESS_CODECS,
+            transport="raw",
+        )
+        info = file_info.download_info if file_info is not None else None
+        if info is None or not info.url:
+            raise RuntimeError(
+                "Яндекс Музыка не вернула файл в lossless-качестве"
+            )
+        if info.codec not in SUFFIXES:
+            raise RuntimeError(f"Неподдерживаемый кодек: {info.codec}")
+        key = info.key if info.transport == "encraw" and info.key else None
+        return AudioSource(
+            url=info.url,
+            audio_format=info.codec,
+            key=key,
+            proxies=_client_proxies(info.client),
+        )
 
     @staticmethod
     def _choose_album(track, album_id: str | None):
@@ -321,10 +410,17 @@ class YandexMusicProvider(MediaProvider, CollectionProvider):
             return None
 
     def _write_metadata(
-        self, track, album, metadata: TrackMetadata, path: Path
+        self,
+        track,
+        album,
+        metadata: TrackMetadata,
+        path: Path,
+        audio_format: AudioFormat,
     ) -> None:
-        """Запись ID3-тегов и обложки в MP3-файл."""
-        write_id3_tags(path, metadata, self._download_cover(track, album))
+        """Запись тегов и обложки в скачанный файл."""
+        write_tags(
+            path, metadata, audio_format, self._download_cover(track, album)
+        )
 
     def _make_track_entry(self, item) -> TrackEntry | None:
         """Преобразует объект библиотеки в элемент нашей коллекции."""
@@ -458,6 +554,24 @@ class YandexMusicProvider(MediaProvider, CollectionProvider):
             )
         return entries
 
+    @staticmethod
+    def _is_downloaded(
+        directory: Path,
+        stem: str,
+        audio_format: AudioFormat,
+        metadata: TrackMetadata,
+    ) -> bool:
+        _, exists = resolve_target(
+            directory, stem, SUFFIXES[audio_format], metadata.source_id
+        )
+        return exists
+
+    @staticmethod
+    def _skipped(progress_callback: ProgressCallback | None) -> DownloadOutcome:
+        if progress_callback is not None:
+            progress_callback(100.0)
+        return DownloadOutcome.SKIPPED
+
     def download(
         self,
         url: str,
@@ -482,40 +596,39 @@ class YandexMusicProvider(MediaProvider, CollectionProvider):
         directory, stem = library_location(
             metadata, output_dir, options.organize_by_album
         )
+        # Быстрая проверка до запросов к API: файл в запрошенном
+        # формате уже скачан.
+        expected_format: AudioFormat = "flac" if options.lossless else "mp3"
+        if self._is_downloaded(directory, stem, expected_format, metadata):
+            return self._skipped(progress_callback)
+
+        _raise_if_cancelled(cancel_event)
+        source = self._get_source(track, options)
+        # В режиме lossless трек может прийти в MP3 (нет lossless-версии),
+        # поэтому путь окончательно выбираем по фактическому формату.
         output_path, already_downloaded = resolve_target(
-            directory, stem, ".mp3", metadata.source_id
+            directory, stem, SUFFIXES[source.audio_format], metadata.source_id
         )
         if already_downloaded:
-            if progress_callback is not None:
-                progress_callback(100.0)
-            return DownloadOutcome.SKIPPED
+            return self._skipped(progress_callback)
 
         directory.mkdir(parents=True, exist_ok=True)
         # Пока файл не скачан и не размечен тегами, он лежит
-        # под временным именем — недокачанных .mp3 не остаётся.
+        # под временным именем — недокачанных файлов не остаётся.
         part_path = output_path.with_name(output_path.name + ".part")
-
-        download_info = self._select_download_info(
-            track,
-            options.audio_bitrate_kbps,
-        )
-        _raise_if_cancelled(cancel_event)
-        # Прямая ссылка действует около минуты — получаем её
-        # непосредственно перед загрузкой.
-        direct_link = download_info.get_direct_link()
-        proxies = getattr(
-            getattr(download_info.client, "request", None), "proxies", None
-        )
 
         try:
             self._stream_to_file(
-                direct_link,
+                source.url,
                 part_path,
-                proxies,
+                source.proxies,
                 progress_callback,
                 cancel_event,
+                key=source.key,
             )
-            self._write_metadata(track, album, metadata, part_path)
+            self._write_metadata(
+                track, album, metadata, part_path, source.audio_format
+            )
             part_path.replace(output_path)
         finally:
             part_path.unlink(missing_ok=True)

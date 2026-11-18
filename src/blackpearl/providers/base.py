@@ -24,6 +24,9 @@ class DownloadOptions:
 
     kind: MediaKind = "audio"
     audio_bitrate_kbps: int = 192
+    # Скачивать без потерь (FLAC), если источник это умеет. Источники
+    # без lossless используют audio_bitrate_kbps.
+    lossless: bool = False
     # Максимальная высота видео (1080, 720...); None — без ограничения.
     video_max_height: int | None = None
     # Раскладывать по папкам «Исполнитель/Альбом (Год)/01 - Трек»,

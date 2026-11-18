@@ -23,6 +23,9 @@ from blackpearl.ui.ui_py.main_ui import Ui_MainWindow
 from blackpearl.ui.widgets.audio_table import AudioTable, TableRow
 
 
+LOSSLESS = "lossless"
+
+
 class MainWindow(QMainWindow):
     # Сколько ошибок показывать в итоговом окне, остальные — числом.
     MAX_REPORTED_FAILURES = 15
@@ -59,6 +62,9 @@ class MainWindow(QMainWindow):
 
         for index, bitrate in enumerate((128, 192, 320)):
             self.ui.audio_quality_cb.setItemData(index, bitrate)
+        # Пункт добавляется кодом, пока его нет в форме Designer.
+        if self.ui.audio_quality_cb.findData(LOSSLESS) < 0:
+            self.ui.audio_quality_cb.addItem("FLAC (lossless)", LOSSLESS)
 
     def _connect_signals(self) -> None:
         self.ui.main_audio_btn.clicked.connect(
@@ -253,13 +259,20 @@ class MainWindow(QMainWindow):
             provider=self._current_provider,
             jobs=jobs,
             output_dir=Path(output_dir),
-            options=DownloadOptions(
-                kind="audio",
-                audio_bitrate_kbps=self.ui.audio_quality_cb.currentData(),
-            ),
+            options=self._audio_options(),
         )
         self.ui.audio_progressBar.setValue(0)
         self._set_downloading(True)
+
+    def _audio_options(self) -> DownloadOptions:
+        quality = self.ui.audio_quality_cb.currentData()
+        if quality == LOSSLESS:
+            # Источники без lossless (yt-dlp) скачают MP3 в максимальном
+            # качестве.
+            return DownloadOptions(
+                kind="audio", lossless=True, audio_bitrate_kbps=320
+            )
+        return DownloadOptions(kind="audio", audio_bitrate_kbps=quality)
 
     @Slot(int, int, str)
     def _on_track_started(self, index: int, total: int, title: str) -> None:

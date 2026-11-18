@@ -358,3 +358,25 @@ def test_close_during_lookup_waits_for_it(window):
 )
 def test_summary_text(summary, expected):
     assert MainWindow._summary_text(summary) == expected
+
+
+def test_quality_box_has_lossless_option(window):
+    box = window.ui.audio_quality_cb
+
+    assert [box.itemData(i) for i in range(box.count())] == [
+        128, 192, 320, view.LOSSLESS
+    ]
+
+
+@pytest.mark.parametrize(
+    ("index", "lossless", "bitrate"),
+    [(0, False, 128), (2, False, 320), (3, True, 320)],
+)
+def test_audio_options_follow_quality_box(window, index, lossless, bitrate):
+    window.ui.audio_quality_cb.setCurrentIndex(index)
+
+    options = window._audio_options()
+
+    assert options.kind == "audio"
+    assert options.lossless is lossless
+    assert options.audio_bitrate_kbps == bitrate

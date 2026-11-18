@@ -1,9 +1,11 @@
+import sys
 from threading import Event
 from types import SimpleNamespace
 
 import pytest
 import requests
 
+from blackpearl.core.track_metadata import TrackMetadata, write_tags
 from blackpearl.providers import yandex_music_provider
 from blackpearl.providers.base import (
     DownloadCancelled,
@@ -11,6 +13,7 @@ from blackpearl.providers.base import (
     DownloadOutcome,
 )
 from blackpearl.providers.yandex_music_provider import YandexMusicProvider
+from tests.test_track_metadata import make_flac
 
 TRACK_URL = "https://music.yandex.ru/album/1/track/2"
 DIRECT_LINK = "https://cdn.example/track.mp3"
@@ -72,7 +75,7 @@ def provider(monkeypatch):
     monkeypatch.setattr(
         provider,
         "_write_metadata",
-        lambda track, album, metadata, path: tagged.append(path),
+        lambda track, album, metadata, path, audio_format: tagged.append(path),
     )
     provider.tagged = tagged
     return provider
@@ -201,7 +204,7 @@ def test_metadata_error_removes_partial_file(provider, http, tmp_path, monkeypat
         provider, "_get_track", lambda url: make_track(FakeDownloadInfo(192))
     )
 
-    def broken_metadata(track, album, metadata, path):
+    def broken_metadata(track, album, metadata, path, audio_format):
         raise OSError("disk full")
 
     monkeypatch.setattr(provider, "_write_metadata", broken_metadata)
@@ -470,3 +473,186 @@ def test_different_track_with_same_name_is_not_skipped(http, tmp_path, monkeypat
         "03 - Song (2).mp3",
         "03 - Song.mp3",
     ]
+
+
+class FakeFileInfo:
+    """Ответ get-file-info: FileInfo с вложенным FileDownloadInfo."""
+
+    def __init__(self, codec="flac", transport="raw", key=None, url=DIRECT_LINK):
+        self.download_info = SimpleNamespace(
+            codec=codec,
+            transport=transport,
+            key=key,
+            url=url,
+            client=SimpleNamespace(request=SimpleNamespace(proxies=None)),
+        )
+
+
+def make_lossless_track(file_info, calls=None):
+    track = make_track(albums=[make_album()])
+
+    def get_file_info(**kwargs):
+        if calls is not None:
+            calls.append(kwargs)
+        return file_info
+
+    track.get_file_info = get_file_info
+    return track
+
+
+def test_lossless_downloads_flac(provider, http, tmp_path, monkeypatch):
+    calls = []
+    track = make_lossless_track(FakeFileInfo(), calls)
+    monkeypatch.setattr(provider, "_get_track", lambda url: track)
+
+    outcome = provider.download(
+        TRACK_URL, tmp_path, DownloadOptions(lossless=True)
+    )
+
+    flac = tmp_path / "Artist" / "Album (2020)" / "03 - Song.flac"
+    assert outcome is DownloadOutcome.DOWNLOADED
+    assert flac.read_bytes() == b"".join(CHUNKS)
+    assert calls == [
+        {"quality": "lossless", "codecs": ["flac", "mp3"], "transport": "raw"}
+    ]
+    assert http.calls[0][0] == DIRECT_LINK
+    assert [path.name for path in provider.tagged] == ["03 - Song.flac.part"]
+
+
+def test_lossless_falls_back_to_mp3_when_no_flac(
+    provider, http, tmp_path, monkeypatch
+):
+    track = make_lossless_track(FakeFileInfo(codec="mp3"))
+    monkeypatch.setattr(provider, "_get_track", lambda url: track)
+
+    provider.download(TRACK_URL, tmp_path, DownloadOptions(lossless=True))
+
+    album_dir = tmp_path / "Artist" / "Album (2020)"
+    assert [path.name for path in album_dir.iterdir()] == ["03 - Song.mp3"]
+
+
+@pytest.mark.parametrize(
+    "file_info",
+    [None, FakeFileInfo(url=""), SimpleNamespace(download_info=None)],
+)
+def test_lossless_without_file_fails(provider, http, tmp_path, monkeypatch, file_info):
+    track = make_lossless_track(file_info)
+    monkeypatch.setattr(provider, "_get_track", lambda url: track)
+
+    with pytest.raises(RuntimeError, match="lossless"):
+        provider.download(TRACK_URL, tmp_path, DownloadOptions(lossless=True))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_lossless_rejects_unknown_codec(provider, http, tmp_path, monkeypatch):
+    track = make_lossless_track(FakeFileInfo(codec="flac-mp4"))
+    monkeypatch.setattr(provider, "_get_track", lambda url: track)
+
+    with pytest.raises(RuntimeError, match="flac-mp4"):
+        provider.download(TRACK_URL, tmp_path, DownloadOptions(lossless=True))
+
+
+def test_encrypted_file_is_decrypted_while_streaming(
+    provider, http, tmp_path, monkeypatch
+):
+    class XorDecryptor:
+        """Заглушка AES: проверяем, что каждая порция проходит через update."""
+
+        def update(self, chunk):
+            return bytes(byte ^ 0xFF for byte in chunk)
+
+        def finalize(self):
+            return b"!"
+
+    keys = []
+
+    def fake_make_decryptor(key):
+        keys.append(key)
+        return XorDecryptor()
+
+    monkeypatch.setattr(
+        yandex_music_provider, "_make_decryptor", fake_make_decryptor
+    )
+    track = make_lossless_track(FakeFileInfo(transport="encraw", key="00ff"))
+    monkeypatch.setattr(provider, "_get_track", lambda url: track)
+
+    provider.download(TRACK_URL, tmp_path, DownloadOptions(lossless=True))
+
+    flac = tmp_path / "Artist" / "Album (2020)" / "03 - Song.flac"
+    expected = bytes(byte ^ 0xFF for byte in b"".join(CHUNKS)) + b"!"
+    assert flac.read_bytes() == expected
+    assert keys == ["00ff"]
+
+
+def test_raw_transport_is_not_decrypted(provider, http, tmp_path, monkeypatch):
+    def unexpected(key):
+        raise AssertionError("расшифровка не нужна")
+
+    monkeypatch.setattr(yandex_music_provider, "_make_decryptor", unexpected)
+    # Ключ есть, но transport=raw — файл не зашифрован.
+    track = make_lossless_track(FakeFileInfo(transport="raw", key="00ff"))
+    monkeypatch.setattr(provider, "_get_track", lambda url: track)
+
+    provider.download(TRACK_URL, tmp_path, DownloadOptions(lossless=True))
+
+
+def test_missing_cryptography_gives_clear_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "cryptography", None)
+    monkeypatch.setitem(sys.modules, "cryptography.hazmat.primitives.ciphers", None)
+
+    with pytest.raises(RuntimeError, match="uv add cryptography"):
+        yandex_music_provider._make_decryptor("00" * 16)
+
+
+def test_decryptor_matches_library_decryption():
+    pytest.importorskip("cryptography")
+    from yandex_music.utils.decrypt import decrypt_track
+
+    key = "000102030405060708090a0b0c0d0e0f"
+    encrypted = bytes(range(256)) * 300
+    decryptor = yandex_music_provider._make_decryptor(key)
+    # Порциями, как при скачивании: CTR должен продолжать счётчик.
+    streamed = b"".join(
+        decryptor.update(encrypted[i : i + 1000])
+        for i in range(0, len(encrypted), 1000)
+    ) + decryptor.finalize()
+
+    assert streamed == decrypt_track(encrypted, key)
+
+
+def test_existing_flac_is_skipped_without_api_calls(http, tmp_path, monkeypatch):
+    provider = YandexMusicProvider()
+    monkeypatch.setattr(provider, "_download_cover", lambda track, album: None)
+    calls = []
+    track = make_lossless_track(FakeFileInfo(), calls)
+    monkeypatch.setattr(provider, "_get_track", lambda url: track)
+    album_dir = tmp_path / "Artist" / "Album (2020)"
+    album_dir.mkdir(parents=True)
+    existing = make_flac(album_dir / "03 - Song.flac")
+    write_tags(
+        existing, TrackMetadata(source_id="yandex:2", title="Song"), "flac"
+    )
+
+    outcome = provider.download(
+        TRACK_URL, tmp_path, DownloadOptions(lossless=True)
+    )
+
+    assert outcome is DownloadOutcome.SKIPPED
+    assert calls == []
+    assert http.calls == []
+
+
+def test_mp3_copy_does_not_block_lossless_download(provider, http, tmp_path, monkeypatch):
+    # Раньше скачанный MP3 не мешает скачать FLAC того же трека.
+    album_dir = tmp_path / "Artist" / "Album (2020)"
+    album_dir.mkdir(parents=True)
+    (album_dir / "03 - Song.mp3").write_bytes(b"mp3")
+    track = make_lossless_track(FakeFileInfo())
+    monkeypatch.setattr(provider, "_get_track", lambda url: track)
+
+    outcome = provider.download(
+        TRACK_URL, tmp_path, DownloadOptions(lossless=True)
+    )
+
+    assert outcome is DownloadOutcome.DOWNLOADED
+    assert (album_dir / "03 - Song.flac").exists()
