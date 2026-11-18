@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 from blackpearl.providers.base import (
     DownloadCancelled,
     DownloadOptions,
+    DownloadOutcome,
     MediaInfo,
     MediaProvider,
 )
@@ -218,3 +219,19 @@ def test_manager_can_run_queue_again_after_finish(manager, tmp_path):
 
     assert provider.downloaded == ["a", "b"]
     assert manager.summaries[1].succeeded == 1
+
+
+def test_skipped_tracks_are_counted_separately(manager, tmp_path):
+    class SkippingProvider(ScriptedProvider):
+        def download(self, url, output_dir, options, progress_callback=None,
+                     cancel_event=None):
+            self.downloaded.append(url)
+            if url == "b":
+                return DownloadOutcome.SKIPPED
+            return None  # None считается обычной загрузкой
+
+    summary = run(manager, SkippingProvider(), jobs("a", "b", "c"), tmp_path)
+
+    assert summary.succeeded == 2
+    assert summary.skipped == 1
+    assert not summary.cancelled

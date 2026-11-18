@@ -16,6 +16,7 @@ from blackpearl.providers.base import (
 )
 from blackpearl.providers.registry import ProviderRegistry
 from blackpearl.ui import view
+from blackpearl.services.download_worker import DownloadSummary
 from blackpearl.ui.view import MainWindow
 from blackpearl.ui.widgets.audio_table import TableRow
 
@@ -335,3 +336,25 @@ def test_close_during_lookup_waits_for_it(window):
     release.set()
     wait_until(lambda: not window.isVisible())
     assert not window._lookup.is_running
+
+
+@pytest.mark.parametrize(
+    ("summary", "expected"),
+    [
+        (DownloadSummary(total=3, succeeded=3), "Загрузка завершена. Скачано треков: 3"),
+        (
+            DownloadSummary(total=3, succeeded=1, skipped=2),
+            "Загрузка завершена. Скачано 1 из 3, уже были: 2",
+        ),
+        (
+            DownloadSummary(total=4, succeeded=1, skipped=2, failed=(("x", "e"),)),
+            "Загрузка завершена. Скачано 1 из 4, уже были: 2, ошибок: 1",
+        ),
+        (
+            DownloadSummary(total=5, succeeded=1, skipped=1, cancelled=True),
+            "Загрузка отменена. Скачано 1 из 5, уже были: 1",
+        ),
+    ],
+)
+def test_summary_text(summary, expected):
+    assert MainWindow._summary_text(summary) == expected

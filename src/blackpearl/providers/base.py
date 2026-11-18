@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from threading import Event
 from typing import ClassVar, Literal
@@ -25,6 +26,17 @@ class DownloadOptions:
     audio_bitrate_kbps: int = 192
     # Максимальная высота видео (1080, 720...); None — без ограничения.
     video_max_height: int | None = None
+    # Раскладывать по папкам «Исполнитель/Альбом (Год)/01 - Трек»,
+    # если источник знает альбом. Иначе — всё в одну папку.
+    organize_by_album: bool = True
+
+
+class DownloadOutcome(Enum):
+    """Чем закончилась успешная загрузка."""
+
+    DOWNLOADED = "downloaded"
+    # Трек уже был скачан ранее — повторно не загружался.
+    SKIPPED = "skipped"
 
 
 @dataclass
@@ -94,9 +106,10 @@ class MediaProvider(ABC):
         options: DownloadOptions,
         progress_callback: ProgressCallback | None = None,
         cancel_event: Event | None = None,
-        ) -> None:
+        ) -> DownloadOutcome | None:
         """Скачивает медиа по данному URL в указанный каталог.
 
+        Возвращает DownloadOutcome; None считается DOWNLOADED.
         При отмене через cancel_event бросает DownloadCancelled
         и не оставляет недокачанных файлов.
         """

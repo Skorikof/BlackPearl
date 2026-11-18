@@ -283,16 +283,22 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _summary_text(summary: DownloadSummary) -> str:
         if summary.cancelled:
-            return (
+            text = (
                 f"Загрузка отменена. Скачано {summary.succeeded} "
                 f"из {summary.total}"
             )
-        if summary.failed:
-            return (
-                f"Загрузка завершена. Скачано {summary.succeeded} из "
-                f"{summary.total}, ошибок: {len(summary.failed)}"
+        elif not summary.failed and not summary.skipped:
+            return f"Загрузка завершена. Скачано треков: {summary.total}"
+        else:
+            text = (
+                f"Загрузка завершена. Скачано {summary.succeeded} "
+                f"из {summary.total}"
             )
-        return f"Загрузка завершена. Скачано треков: {summary.total}"
+        if summary.skipped:
+            text += f", уже были: {summary.skipped}"
+        if summary.failed:
+            text += f", ошибок: {len(summary.failed)}"
+        return text
 
     def _report_failures(self, failed: list[tuple[str, str]]) -> None:
         lines = [f"• {title}: {message}" for title, message in failed]

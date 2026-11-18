@@ -4,30 +4,45 @@ from pathlib import Path
 from threading import Event, Lock
 from urllib.parse import urlparse
 
-from mutagen.id3 import (
-    APIC,
-    ID3,
-    TALB,
-    TDRC,
-    TIT2,
-    TPE1,
-    ID3NoHeaderError,
-)
+import logging
+
 import requests
 from PIL import Image
 from yandex_music import Client
 
 from blackpearl.core.config import settings
-from blackpearl.core.filenames import sanitize_filename, unique_path
+from blackpearl.core.track_metadata import (
+    VARIOUS_ARTISTS,
+    TrackMetadata,
+    library_location,
+    resolve_target,
+    write_id3_tags,
+)
 from blackpearl.providers.base import (
     CollectionProvider,
     DownloadCancelled,
     DownloadOptions,
+    DownloadOutcome,
     MediaInfo,
     MediaProvider,
     ProgressCallback,
     TrackEntry,
 )
+
+
+logger = logging.getLogger(__name__)
+
+COVER_SIZE = "400x400"
+COVER_MIME_TYPES = {"JPEG": "image/jpeg", "PNG": "image/png"}
+
+
+def _artist_names(artists) -> list[str]:
+    return [artist.name for artist in (artists or []) if artist.name]
+
+
+def _with_version(title: str, version: str | None) -> str:
+    """«Song» + «Remastered 2011» → «Song (Remastered 2011)»."""
+    return f"{title} ({version})" if version else title
 
 
 def _raise_if_cancelled(cancel_event: Event | None) -> None:
@@ -232,70 +247,85 @@ class YandexMusicProvider(MediaProvider, CollectionProvider):
                     if total and progress_callback is not None:
                         progress_callback(min(downloaded / total * 100, 100.0))
 
-    def _write_metadata(self, track, output_path: Path) -> None:
-        """Запись метаданных в MP3-файл."""
-        try:
-            tags = ID3(output_path)
-        except ID3NoHeaderError:
-            tags = ID3()
-        tags.add(TIT2(encoding=3, text=track.title or "Без названия"))
-        artists = [
-            artist.name
-            for artist in (track.artists or [])
-            if artist.name
-        ]
-        if artists:
-            tags.add(TPE1(encoding=3, text=artists))
+    @staticmethod
+    def _choose_album(track, album_id: str | None):
+        """Альбом, из которого скачивается трек.
+
+        Один трек может входить в несколько альбомов (оригинал, сборник,
+        переиздание); берём тот, что указан в ссылке, иначе первый.
+        """
         albums = track.albums or []
-        if albums:
-            album = albums[0]
-            if album.title:
-                tags.add(TALB(encoding=3, text=album.title))
-            if album.year:
-                tags.add(TDRC(encoding=3, text=str(album.year)))
+        if album_id is not None:
+            for album in albums:
+                if str(album.id) == album_id:
+                    return album
+        return albums[0] if albums else None
 
-        # Загружаем обложку и добавляем её в MP3.
-        cover = None
-        # Сначала пробуем получить обложку самого трека.
-        if track.cover_uri:
-            cover = track.download_cover_bytes(size="400x400")
+    @staticmethod
+    def _build_metadata(track, album) -> TrackMetadata:
+        title = _with_version(track.title or "Без названия", track.version)
+        artists = _artist_names(track.artists)
+        if album is None:
+            return TrackMetadata(
+                source_id=f"yandex:{track.id}",
+                title=title,
+                artists=artists,
+            )
 
-        # Если у трека обложки нет — берём её из альбома.
-        if not cover and track.albums:
-            album = track.albums[0]
-            if album.cover_uri:
-                cover = album.download_cover_bytes(size="400x400")
+        album_artists = _artist_names(album.artists)
+        is_compilation = album.type == "compilation" or any(
+            getattr(artist, "various", False) for artist in (album.artists or [])
+        )
+        position = album.track_position
+        return TrackMetadata(
+            source_id=f"yandex:{track.id}",
+            title=title,
+            artists=artists,
+            album_title=_with_version(album.title, album.version)
+            if album.title
+            else None,
+            album_artist=(
+                VARIOUS_ARTISTS
+                if is_compilation or not album_artists
+                else ", ".join(album_artists)
+            ),
+            year=album.year or album.original_release_year,
+            genre=album.genre,
+            track_number=position.index if position is not None else None,
+            disc_number=position.volume if position is not None else None,
+        )
 
-        if cover:
-            try:
-                image = Image.open(BytesIO(cover))
-                image.verify()
-                image_format = image.format
-                mime_types = {
-                    "JPEG": "image/jpeg",
-                    "PNG": "image/png",
-                }
-                mime = mime_types.get(image_format)
-                if mime is None:
-                    raise ValueError(
-                        f"Неподдерживаемый формат обложки: {image_format}"
-                    )
-                tags.add(
-                    APIC(
-                        encoding=3,
-                        mime=mime,
-                        type=3,
-                        desc="Cover",
-                        data=cover,
-                    )
+    @staticmethod
+    def _download_cover(track, album) -> tuple[bytes, str] | None:
+        """Обложка трека (или альбома) и её MIME-тип; None, если её нет."""
+        try:
+            data = None
+            if track.cover_uri:
+                data = track.download_cover_bytes(size=COVER_SIZE)
+            if not data and album is not None and album.cover_uri:
+                data = album.download_cover_bytes(size=COVER_SIZE)
+            if not data:
+                return None
+
+            image = Image.open(BytesIO(data))
+            image.verify()
+            mime = COVER_MIME_TYPES.get(image.format)
+            if mime is None:
+                raise ValueError(
+                    f"Неподдерживаемый формат обложки: {image.format}"
                 )
-                
-            except Exception as error:
-                print(f"Ошибка обработки обложки: {error}")
-            
-        tags.update_to_v23()
-        tags.save(output_path, v2_version=3)
-        
+            return data, mime
+        except Exception as error:
+            # Без обложки трек всё равно полезен — не роняем загрузку.
+            logger.warning("Не удалось получить обложку: %s", error)
+            return None
+
+    def _write_metadata(
+        self, track, album, metadata: TrackMetadata, path: Path
+    ) -> None:
+        """Запись ID3-тегов и обложки в MP3-файл."""
+        write_id3_tags(path, metadata, self._download_cover(track, album))
+
     def _make_track_entry(self, item) -> TrackEntry | None:
         """Преобразует объект библиотеки в элемент нашей коллекции."""
         track = getattr(item, "track", None) or item
@@ -435,23 +465,32 @@ class YandexMusicProvider(MediaProvider, CollectionProvider):
         options: DownloadOptions,
         progress_callback: ProgressCallback | None = None,
         cancel_event: Event | None = None,
-        ) -> None:
-        """Скачивает трек по URL в указанный каталог."""
+        ) -> DownloadOutcome:
+        """Скачивает трек по URL в указанный каталог.
+
+        Если этот же трек уже лежит в целевой папке (узнаём по ID
+        в тегах), повторно не скачивает и возвращает SKIPPED.
+        """
         if not self.supports(options.kind):
             raise ValueError("Яндекс Музыка поддерживает только аудио")
-        output_dir.mkdir(parents=True, exist_ok=True)
         _raise_if_cancelled(cancel_event)
         track = self._get_track(url)
-        artists = ", ".join(
-            artist.name
-            for artist in (track.artists or [])
-            if artist.name
+        _, album_id = self._get_track_id(url)
+        album = self._choose_album(track, album_id)
+        metadata = self._build_metadata(track, album)
+
+        directory, stem = library_location(
+            metadata, output_dir, options.organize_by_album
         )
-        title = track.title or "Без названия"
-        filename = sanitize_filename(
-            f"{artists} — {title}" if artists else title
+        output_path, already_downloaded = resolve_target(
+            directory, stem, ".mp3", metadata.source_id
         )
-        output_path = unique_path(output_dir, filename, ".mp3")
+        if already_downloaded:
+            if progress_callback is not None:
+                progress_callback(100.0)
+            return DownloadOutcome.SKIPPED
+
+        directory.mkdir(parents=True, exist_ok=True)
         # Пока файл не скачан и не размечен тегами, он лежит
         # под временным именем — недокачанных .mp3 не остаётся.
         part_path = output_path.with_name(output_path.name + ".part")
@@ -476,10 +515,11 @@ class YandexMusicProvider(MediaProvider, CollectionProvider):
                 progress_callback,
                 cancel_event,
             )
-            self._write_metadata(track, part_path)
+            self._write_metadata(track, album, metadata, part_path)
             part_path.replace(output_path)
         finally:
             part_path.unlink(missing_ok=True)
 
         if progress_callback is not None:
             progress_callback(100.0)
+        return DownloadOutcome.DOWNLOADED

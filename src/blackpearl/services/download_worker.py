@@ -7,6 +7,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 from blackpearl.providers.base import (
     DownloadCancelled,
     DownloadOptions,
+    DownloadOutcome,
     MediaProvider,
 )
 
@@ -25,6 +26,8 @@ class DownloadSummary:
 
     total: int
     succeeded: int
+    # Уже были скачаны ранее и пропущены.
+    skipped: int = 0
     # Не скачанные треки: (название, текст ошибки).
     failed: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     cancelled: bool = False
@@ -68,6 +71,7 @@ class DownloadQueueWorker(QObject):
     def _run_queue(self) -> DownloadSummary:
         total = len(self.jobs)
         succeeded = 0
+        skipped = 0
         failed: list[tuple[str, str]] = []
         cancelled = False
 
@@ -83,7 +87,7 @@ class DownloadQueueWorker(QObject):
                 self.progress_changed.emit((index + percent / 100) / total * 100)
 
             try:
-                self.provider.download(
+                outcome = self.provider.download(
                     url=job.url,
                     output_dir=self.output_dir,
                     options=self.options,
@@ -96,7 +100,10 @@ class DownloadQueueWorker(QObject):
             except Exception as error:
                 failed.append((job.title, str(error) or type(error).__name__))
             else:
-                succeeded += 1
+                if outcome is DownloadOutcome.SKIPPED:
+                    skipped += 1
+                else:
+                    succeeded += 1
 
         if not cancelled:
             self.progress_changed.emit(100.0)
@@ -104,6 +111,7 @@ class DownloadQueueWorker(QObject):
         return DownloadSummary(
             total=total,
             succeeded=succeeded,
+            skipped=skipped,
             failed=tuple(failed),
             cancelled=cancelled,
         )
