@@ -13,6 +13,7 @@ from mutagen.id3 import (
     TPE1,
     ID3NoHeaderError,
 )
+import requests
 from PIL import Image
 from yandex_music import Client
 
@@ -29,6 +30,9 @@ from blackpearl.providers.base import (
 class YandexMusicProvider(MediaProvider):
     """Провайдер для работы с Яндекс Музыкой."""
     supported_kinds = frozenset({"audio"})
+    CHUNK_SIZE = 64 * 1024
+    # (подключение, ожидание очередной порции данных), секунды.
+    HTTP_TIMEOUT = (10, 30)
 
     TRACK_PATTERN = re.compile(r"/track/(\d+)")
     ALBUM_PATTERN = re.compile(r"/album/(\d+)")
@@ -139,19 +143,20 @@ class YandexMusicProvider(MediaProvider):
             duration_seconds=duration,
         )
         
-    def _select_bitrate(self, track, requested_bitrate: int) -> int:
+    def _select_download_info(self, track, requested_bitrate: int):
+        """Выбирает вариант загрузки MP3 (объект DownloadInfo)."""
         download_info = track.get_download_info()
         if not download_info:
             raise RuntimeError(
                 "Яндекс Музыка не вернула варианты загрузки"
             )
-        available = sorted({
-            item.bitrate_in_kbps
+        available = [
+            item
             for item in download_info
             if item.codec == "mp3"
             and not item.preview
             and item.bitrate_in_kbps
-        })
+        ]
         if not available:
             raise RuntimeError(
                 "Для трека нет доступных вариантов MP3"
@@ -159,16 +164,54 @@ class YandexMusicProvider(MediaProvider):
         # Выбираем максимальный доступный битрейт,
         # который не превышает заданный пользователем.
         suitable = [
-            bitrate
-            for bitrate in available
-            if bitrate <= requested_bitrate
+            item
+            for item in available
+            if item.bitrate_in_kbps <= requested_bitrate
         ]
         if suitable:
-            return max(suitable)
+            return max(suitable, key=lambda item: item.bitrate_in_kbps)
         # Если вариантов ниже заданного нет,
         # используем самый низкий доступный.
-        return min(available)
-        
+        return min(available, key=lambda item: item.bitrate_in_kbps)
+
+    def _stream_to_file(
+        self,
+        direct_link: str,
+        output_path: Path,
+        proxies: dict | None,
+        progress_callback: ProgressCallback | None,
+        cancel_event: Event | None,
+    ) -> bool:
+        """Скачивает файл по прямой ссылке порциями.
+
+        Библиотека yandex-music скачивает файл целиком одним запросом,
+        без прогресса и возможности отмены, поэтому сам файл
+        загружаем сами. Возвращает False, если загрузка отменена.
+        """
+        with requests.get(
+            direct_link,
+            stream=True,
+            timeout=self.HTTP_TIMEOUT,
+            proxies=proxies,
+        ) as response:
+            response.raise_for_status()
+            try:
+                total = int(response.headers.get("Content-Length") or 0)
+            except ValueError:
+                total = 0
+            downloaded = 0
+
+            with output_path.open("wb") as file:
+                for chunk in response.iter_content(self.CHUNK_SIZE):
+                    if cancel_event is not None and cancel_event.is_set():
+                        return False
+                    file.write(chunk)
+                    downloaded += len(chunk)
+                    if total and progress_callback is not None:
+                        progress_callback(min(downloaded / total * 100, 100.0))
+
+        return True
+
     def _write_metadata(self, track, output_path: Path) -> None:
         """Запись метаданных в MP3-файл."""
         try:
@@ -393,23 +436,37 @@ class YandexMusicProvider(MediaProvider):
             filename,
         )
         output_path = output_dir / f"{filename}.mp3"
-        # Загружаем аудио в выбранном качестве.
-        
-        actual_bitrate = self._select_bitrate(
+        # Пока файл не скачан и не размечен тегами, он лежит
+        # под временным именем — недокачанных .mp3 не остаётся.
+        part_path = output_path.with_name(output_path.name + ".part")
+
+        download_info = self._select_download_info(
             track,
             options.audio_bitrate_kbps,
         )
-
-        track.download(
-            str(output_path),
-            codec="mp3",
-            bitrate_in_kbps=actual_bitrate,
-        )
-        
-        
         if cancel_event is not None and cancel_event.is_set():
-            output_path.unlink(missing_ok=True)
             return
-        self._write_metadata(track, output_path)
+        # Прямая ссылка действует около минуты — получаем её
+        # непосредственно перед загрузкой.
+        direct_link = download_info.get_direct_link()
+        proxies = getattr(
+            getattr(download_info.client, "request", None), "proxies", None
+        )
+
+        try:
+            completed = self._stream_to_file(
+                direct_link,
+                part_path,
+                proxies,
+                progress_callback,
+                cancel_event,
+            )
+            if not completed:
+                return
+            self._write_metadata(track, part_path)
+            part_path.replace(output_path)
+        finally:
+            part_path.unlink(missing_ok=True)
+
         if progress_callback is not None:
             progress_callback(100.0)

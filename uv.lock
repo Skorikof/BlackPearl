@@ -12,6 +12,7 @@ dependencies = [
     { name = "pillow" },
     { name = "pyside6" },
     { name = "python-dotenv" },
+    { name = "requests" },
     { name = "yandex-music" },
     { name = "yt-dlp" },
 ]
@@ -29,6 +30,7 @@ requires-dist = [
     { name = "pyside6", specifier = ">=6.8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
+    { name = "requests", specifier = ">=2.34" },
     { name = "yandex-music", specifier = ">=3.2.2" },
     { name = "yt-dlp", specifier = ">=2026.10.26" },
 ]
