@@ -20,7 +20,7 @@ from blackpearl.services.background import BackgroundTask
 from blackpearl.services.download_manager import DownloadManager
 from blackpearl.services.download_worker import DownloadJob, DownloadSummary
 from blackpearl.ui.ui_py.main_ui import Ui_MainWindow
-from blackpearl.ui.widgets.audio_table import AudioTable
+from blackpearl.ui.widgets.audio_table import AudioTable, TableRow
 
 
 class MainWindow(QMainWindow):
@@ -96,16 +96,14 @@ class MainWindow(QMainWindow):
 
     def _clear_table(self) -> None:
         self._table_entries.clear()
-        self._table.set_row_count(0)
-        self.ui.audio_check_all_btn.setEnabled(False)
-        self.ui.audio_remove_all_btn.setEnabled(False)
-        self.ui.audio_download_btn.setEnabled(False)
+        self._table.clear()
+        self._update_table_controls()
 
     def _update_table_controls(self) -> None:
-        flag_all, has_selected = self._table.update_table_controls()
-        self.ui.audio_check_all_btn.setEnabled(flag_all)
-        self.ui.audio_remove_all_btn.setEnabled(flag_all)
-        self.ui.audio_download_btn.setEnabled(has_selected)
+        has_rows = self._table.row_count() > 0
+        self.ui.audio_check_all_btn.setEnabled(has_rows)
+        self.ui.audio_remove_all_btn.setEnabled(has_rows)
+        self.ui.audio_download_btn.setEnabled(self._table.has_checked())
 
     def _set_downloading(self, downloading: bool) -> None:
         """Переключает кнопки между режимом загрузки и ожидания."""
@@ -186,14 +184,10 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def show_info(self, info) -> None:
         self._table_entries = [self._current_url]
-        with self._table.batch_update():
-            self._table.set_row_count(1)
-            self._table.add_table_row(
-                0,
-                "",
-                info.title,
-                info.duration_seconds,
-            )
+        self._table.set_rows(
+            [TableRow(artist="", title=info.title,
+                      duration_seconds=info.duration_seconds)]
+        )
         self._update_table_controls()
         self._set_status(f"Найдено: {info.title}")
 
@@ -210,18 +204,14 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def show_collection(self, tracks: list[TrackEntry]) -> None:
         self._table_entries = list(tracks)
-        # Без batch_update каждая ячейка вызывала бы itemChanged
-        # и полный пересчёт кнопок — квадратичная сложность.
-        with self._table.batch_update():
-            self._table.set_row_count(len(tracks))
-            for row, track in enumerate(tracks):
-                self._table.add_table_row(
-                    row,
-                    track.artists,
-                    track.title,
-                    track.duration_seconds,
-                )
-
+        self._table.set_rows(
+            TableRow(
+                artist=track.artists,
+                title=track.title,
+                duration_seconds=track.duration_seconds,
+            )
+            for track in tracks
+        )
         self._update_table_controls()
         self._set_status(f"Найдено треков: {len(tracks)}")
 
@@ -244,8 +234,7 @@ class MainWindow(QMainWindow):
                 url=self._entry_url(self._table_entries[row]),
                 title=self._table.row_title(row),
             )
-            for row in range(self._table.get_row_count())
-            if self._table.is_checked(row)
+            for row in self._table.checked_rows()
         ]
         if not jobs:
             self._set_status("Выбери хотя бы один трек")

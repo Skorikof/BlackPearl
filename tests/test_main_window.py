@@ -5,7 +5,6 @@ import time
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from blackpearl.providers.base import (
@@ -18,6 +17,7 @@ from blackpearl.providers.base import (
 from blackpearl.providers.registry import ProviderRegistry
 from blackpearl.ui import view
 from blackpearl.ui.view import MainWindow
+from blackpearl.ui.widgets.audio_table import TableRow
 
 URL = "https://example.com/media"
 
@@ -103,8 +103,7 @@ def start_single_download(window: MainWindow, provider: MediaProvider) -> None:
     window._current_provider = provider
     window._current_url = URL
     window._table_entries = [URL]
-    window._table.set_row_count(1)
-    window._table.add_table_row(0, "", "Media", None)
+    window._table.set_rows([TableRow(artist="", title="Media")])
     window.start_download()
     wait_until(lambda: provider.calls == 1)
 
@@ -119,7 +118,7 @@ def test_check_url_is_blocked_during_download(window, provider):
 
     # Проверка ссылки не должна сбрасывать таблицу и текущего провайдера.
     assert window._current_provider is provider
-    assert window._table.get_row_count() == 1
+    assert window._table.row_count() == 1
 
     provider.release.set()
     wait_until(lambda: "Загрузка завершена" in window.ui.audio_label.text())
@@ -249,7 +248,7 @@ def test_manual_check_still_updates_buttons(window):
     window.select_no_tracks()
     assert not window.ui.audio_download_btn.isEnabled()
 
-    window._table.get_item(2, 0).setCheckState(Qt.CheckState.Checked)
+    window._table.set_checked(2, True)
 
     assert window.ui.audio_download_btn.isEnabled()
 
@@ -284,7 +283,7 @@ def test_check_url_loads_collection_from_any_collection_provider(window):
     wait_until(lambda: window.ui.audio_check_btn.isEnabled())
 
     assert provider.collection_requests == ["https://example.com/album/1"]
-    assert window._table.get_row_count() == 3
+    assert window._table.row_count() == 3
     assert window.ui.audio_label.text() == "Найдено треков: 3"
 
 
@@ -297,7 +296,7 @@ def test_check_url_gets_info_for_single_media(window):
     wait_until(lambda: window.ui.audio_check_btn.isEnabled())
 
     assert provider.collection_requests == []
-    assert window._table.get_row_count() == 1
+    assert window._table.row_count() == 1
     assert window.ui.audio_label.text() == "Найдено: Media"
 
 
@@ -315,7 +314,7 @@ def test_check_url_shows_lookup_error(window):
     assert window.ui.audio_label.text() == (
         "Не удалось получить информацию: видео недоступно"
     )
-    assert window._table.get_row_count() == 0
+    assert window._table.row_count() == 0
 
 
 def test_close_during_lookup_waits_for_it(window):
