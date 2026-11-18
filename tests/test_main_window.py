@@ -8,7 +8,12 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
-from blackpearl.providers.base import MediaInfo, MediaProvider, TrackEntry
+from blackpearl.providers.base import (
+    DownloadCancelled,
+    MediaInfo,
+    MediaProvider,
+    TrackEntry,
+)
 from blackpearl.ui import view
 from blackpearl.ui.view import MainWindow
 
@@ -39,7 +44,7 @@ class BlockingProvider(MediaProvider):
         self.calls += 1
         while not self.release.is_set():
             if cancel_event is not None and cancel_event.is_set():
-                return
+                raise DownloadCancelled()
             time.sleep(0.01)
 
 
@@ -110,8 +115,7 @@ def test_check_url_is_blocked_during_download(window, provider):
     window.ui.audio_url_le.setText("https://example.com/other")
     window.check_url()
 
-    # Проверка ссылки не должна сбрасывать таблицу и провайдера очереди.
-    assert window._download_provider is provider
+    # Проверка ссылки не должна сбрасывать таблицу и текущего провайдера.
     assert window._current_provider is provider
     assert window._table.get_row_count() == 1
 
@@ -125,10 +129,10 @@ def test_check_url_is_blocked_during_download(window, provider):
 def test_check_button_reenabled_after_cancel(window, provider):
     start_single_download(window, provider)
 
-    window.download_manager.cancel_download()
+    window.download_manager.cancel()
     wait_until(lambda: not window.download_manager.is_busy)
 
-    assert window.ui.audio_label.text() == "Загрузка отменена"
+    assert window.ui.audio_label.text() == "Загрузка отменена. Скачано 0 из 1"
     assert window.ui.audio_check_btn.isEnabled()
 
 

@@ -6,6 +6,7 @@ import yt_dlp
 
 from blackpearl.core.ffmpeg import require_ffmpeg
 from blackpearl.providers.base import (
+    DownloadCancelled,
     DownloadOptions,
     MediaInfo,
     MediaProvider,
@@ -124,6 +125,9 @@ class YtDlpProvider(MediaProvider):
             **self._build_format_options(options, ffmpeg_location),
         }
 
-        with yt_dlp.YoutubeDL(ydl_options) as downloader:
-            downloader.download([url])
+        try:
+            with yt_dlp.YoutubeDL(ydl_options) as downloader:
+                downloader.download([url])
+        except yt_dlp.utils.DownloadCancelled as error:
+            raise DownloadCancelled(str(error)) from error
 

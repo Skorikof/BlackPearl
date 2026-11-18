@@ -8,6 +8,15 @@ from typing import ClassVar, Literal
 MediaKind = Literal["audio", "video"]
 
 
+class DownloadCancelled(Exception):
+    """Загрузка прервана по запросу пользователя.
+
+    Провайдеры бросают его, когда замечают установленный cancel_event,
+    вместо тихого выхода — так очередь отличает отменённую загрузку
+    от успешно завершённой.
+    """
+
+
 @dataclass(frozen=True)
 class DownloadOptions:
     """Что и в каком качестве скачивать."""
@@ -67,5 +76,9 @@ class MediaProvider(ABC):
         progress_callback: ProgressCallback | None = None,
         cancel_event: Event | None = None,
         ) -> None:
-        """Скачивает медиа по данному URL в указанный путь."""
+        """Скачивает медиа по данному URL в указанный каталог.
+
+        При отмене через cancel_event бросает DownloadCancelled
+        и не оставляет недокачанных файлов.
+        """
         ...

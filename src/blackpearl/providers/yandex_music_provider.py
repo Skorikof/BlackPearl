@@ -20,12 +20,18 @@ from yandex_music import Client
 from blackpearl.core.config import settings
 from blackpearl.core.filenames import sanitize_filename, unique_path
 from blackpearl.providers.base import (
+    DownloadCancelled,
     DownloadOptions,
     MediaInfo,
     MediaProvider,
     ProgressCallback,
     TrackEntry,
 )
+
+
+def _raise_if_cancelled(cancel_event: Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise DownloadCancelled("Загрузка отменена пользователем")
 
 
 class YandexMusicProvider(MediaProvider):
@@ -197,12 +203,12 @@ class YandexMusicProvider(MediaProvider):
         proxies: dict | None,
         progress_callback: ProgressCallback | None,
         cancel_event: Event | None,
-    ) -> bool:
+    ) -> None:
         """Скачивает файл по прямой ссылке порциями.
 
         Библиотека yandex-music скачивает файл целиком одним запросом,
         без прогресса и возможности отмены, поэтому сам файл
-        загружаем сами. Возвращает False, если загрузка отменена.
+        загружаем сами. При отмене бросает DownloadCancelled.
         """
         with requests.get(
             direct_link,
@@ -219,14 +225,11 @@ class YandexMusicProvider(MediaProvider):
 
             with output_path.open("wb") as file:
                 for chunk in response.iter_content(self.CHUNK_SIZE):
-                    if cancel_event is not None and cancel_event.is_set():
-                        return False
+                    _raise_if_cancelled(cancel_event)
                     file.write(chunk)
                     downloaded += len(chunk)
                     if total and progress_callback is not None:
                         progress_callback(min(downloaded / total * 100, 100.0))
-
-        return True
 
     def _write_metadata(self, track, output_path: Path) -> None:
         """Запись метаданных в MP3-файл."""
@@ -436,8 +439,7 @@ class YandexMusicProvider(MediaProvider):
         if not self.supports(options.kind):
             raise ValueError("Яндекс Музыка поддерживает только аудио")
         output_dir.mkdir(parents=True, exist_ok=True)
-        if cancel_event is not None and cancel_event.is_set():
-            return
+        _raise_if_cancelled(cancel_event)
         track = self._get_track(url)
         artists = ", ".join(
             artist.name
@@ -457,8 +459,7 @@ class YandexMusicProvider(MediaProvider):
             track,
             options.audio_bitrate_kbps,
         )
-        if cancel_event is not None and cancel_event.is_set():
-            return
+        _raise_if_cancelled(cancel_event)
         # Прямая ссылка действует около минуты — получаем её
         # непосредственно перед загрузкой.
         direct_link = download_info.get_direct_link()
@@ -467,15 +468,13 @@ class YandexMusicProvider(MediaProvider):
         )
 
         try:
-            completed = self._stream_to_file(
+            self._stream_to_file(
                 direct_link,
                 part_path,
                 proxies,
                 progress_callback,
                 cancel_event,
             )
-            if not completed:
-                return
             self._write_metadata(track, part_path)
             part_path.replace(output_path)
         finally:

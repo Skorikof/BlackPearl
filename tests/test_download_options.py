@@ -5,7 +5,12 @@ import pytest
 
 from blackpearl.core import ffmpeg
 from blackpearl.providers import yt_dlp_provider
-from blackpearl.providers.base import DownloadOptions, MediaInfo, MediaProvider
+from blackpearl.providers.base import (
+    DownloadCancelled,
+    DownloadOptions,
+    MediaInfo,
+    MediaProvider,
+)
 from blackpearl.providers.registry import ProviderRegistry
 from blackpearl.providers.yandex_music_provider import YandexMusicProvider
 from blackpearl.providers.yt_dlp_provider import YtDlpProvider
@@ -171,3 +176,17 @@ def test_registry_returns_none_when_kind_unsupported():
     registry.register(AudioOnlyProvider())
 
     assert registry.get_provider("https://example.com/x", kind="video") is None
+
+
+def test_yt_dlp_cancel_is_reported_as_download_cancelled(monkeypatch, tmp_path):
+    class CancelledYoutubeDL(FakeYoutubeDL):
+        def download(self, urls):
+            raise yt_dlp_provider.yt_dlp.utils.DownloadCancelled("stop")
+
+    monkeypatch.setattr(yt_dlp_provider.yt_dlp, "YoutubeDL", CancelledYoutubeDL)
+    monkeypatch.setattr(yt_dlp_provider, "require_ffmpeg", lambda: "ffmpeg")
+
+    with pytest.raises(DownloadCancelled):
+        YtDlpProvider().download(
+            "https://youtube.com/watch?v=1", tmp_path, DownloadOptions()
+        )

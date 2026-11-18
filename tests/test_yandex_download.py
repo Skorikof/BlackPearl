@@ -5,7 +5,7 @@ import pytest
 import requests
 
 from blackpearl.providers import yandex_music_provider
-from blackpearl.providers.base import DownloadOptions
+from blackpearl.providers.base import DownloadCancelled, DownloadOptions
 from blackpearl.providers.yandex_music_provider import YandexMusicProvider
 
 TRACK_URL = "https://music.yandex.ru/album/1/track/2"
@@ -139,13 +139,14 @@ def test_cancel_mid_download_removes_partial_file(
         progress.append(percent)
         cancel_event.set()  # Отмена после первой порции.
 
-    provider.download(
-        TRACK_URL,
-        tmp_path,
-        DownloadOptions(),
-        progress_callback=on_progress,
-        cancel_event=cancel_event,
-    )
+    with pytest.raises(DownloadCancelled):
+        provider.download(
+            TRACK_URL,
+            tmp_path,
+            DownloadOptions(),
+            progress_callback=on_progress,
+            cancel_event=cancel_event,
+        )
 
     assert progress == [25.0]
     assert list(tmp_path.iterdir()) == []
@@ -164,9 +165,10 @@ def test_cancel_before_direct_link_skips_request(
 
     monkeypatch.setattr(provider, "_get_track", get_track)
 
-    provider.download(
-        TRACK_URL, tmp_path, DownloadOptions(), cancel_event=cancel_event
-    )
+    with pytest.raises(DownloadCancelled):
+        provider.download(
+            TRACK_URL, tmp_path, DownloadOptions(), cancel_event=cancel_event
+        )
 
     assert not info.direct_link_requested
     assert http.calls == []
