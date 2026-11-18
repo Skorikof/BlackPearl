@@ -31,7 +31,7 @@ class BlockingProvider(MediaProvider):
         self,
         url,
         output_dir,
-        audio_bitrate_kbps=None,
+        options=None,
         progress_callback=None,
         cancel_event=None,
     ) -> None:

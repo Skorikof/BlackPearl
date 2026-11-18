@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
 )
 
-from blackpearl.providers.base import TrackEntry
+from blackpearl.providers.base import DownloadOptions, TrackEntry
 from blackpearl.providers.registry import ProviderRegistry
 from blackpearl.providers.yandex_music_provider import YandexMusicProvider
 from blackpearl.providers.yt_dlp_provider import YtDlpProvider
@@ -162,7 +162,7 @@ class MainWindow(QMainWindow):
             self._set_status("Введите ссылку")
             return
 
-        provider = self.registry.get_provider(url)
+        provider = self.registry.get_provider(url, kind="audio")
         if provider is None:
             self._set_status("Источник не поддерживается")
             return
@@ -331,7 +331,10 @@ class MainWindow(QMainWindow):
                 provider=self._download_provider,
                 url=url,
                 output_dir=self._output_dir,
-                audio_bitrate_kbps=self.ui.audio_quality_cb.currentData(),
+                options=DownloadOptions(
+                    kind="audio",
+                    audio_bitrate_kbps=self.ui.audio_quality_cb.currentData(),
+                ),
             )
         except RuntimeError as error:
             self._download_queue.clear()

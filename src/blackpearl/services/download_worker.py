@@ -4,7 +4,7 @@ from threading import Event
 import yt_dlp
 from PySide6.QtCore import QObject, Signal, Slot
 
-from blackpearl.providers.base import MediaProvider
+from blackpearl.providers.base import DownloadOptions, MediaProvider
 
 
 class DownloadWorker(QObject):
@@ -18,14 +18,14 @@ class DownloadWorker(QObject):
         self,
         provider: MediaProvider,
         url: str,
-        audio_bitrate_kbps: int,
+        options: DownloadOptions,
         output_dir: Path,
         cancel_event: Event,
     ) -> None:
         super().__init__()
         self.provider = provider
         self.url = url
-        self.audio_bitrate_kbps = audio_bitrate_kbps
+        self.options = options
         self.output_dir = output_dir
         self.cancel_event = cancel_event
 
@@ -35,7 +35,7 @@ class DownloadWorker(QObject):
             self.provider.download(
                 url=self.url,
                 output_dir=self.output_dir,
-                audio_bitrate_kbps=self.audio_bitrate_kbps,
+                options=self.options,
                 progress_callback=self.progress_changed.emit,
                 cancel_event=self.cancel_event,
             )

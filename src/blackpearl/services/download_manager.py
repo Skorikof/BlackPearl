@@ -3,7 +3,7 @@ from threading import Event
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from blackpearl.providers.base import MediaProvider
+from blackpearl.providers.base import DownloadOptions, MediaProvider
 from blackpearl.services.download_worker import DownloadWorker
 
 
@@ -26,7 +26,7 @@ class DownloadManager(QObject):
         provider: MediaProvider,
         url: str,
         output_dir: Path,
-        audio_bitrate_kbps: int = 192,
+        options: DownloadOptions,
     ) -> None:
         if self._thread is not None:
             raise RuntimeError("Загрузка уже выполняется")
@@ -39,7 +39,7 @@ class DownloadManager(QObject):
             url=url,
             output_dir=output_dir,
             cancel_event=self._cancel_event,
-            audio_bitrate_kbps=audio_bitrate_kbps,
+            options=options,
         )
 
         self._worker.moveToThread(self._thread)

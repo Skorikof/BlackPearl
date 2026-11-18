@@ -17,11 +17,19 @@ from PIL import Image
 from yandex_music import Client
 
 from blackpearl.core.config import settings
-from blackpearl.providers.base import MediaInfo, MediaProvider, TrackEntry
+from blackpearl.providers.base import (
+    DownloadOptions,
+    MediaInfo,
+    MediaProvider,
+    ProgressCallback,
+    TrackEntry,
+)
 
 
 class YandexMusicProvider(MediaProvider):
     """Провайдер для работы с Яндекс Музыкой."""
+    supported_kinds = frozenset({"audio"})
+
     TRACK_PATTERN = re.compile(r"/track/(\d+)")
     ALBUM_PATTERN = re.compile(r"/album/(\d+)")
     # Ссылка на сам альбом (без трека), допускается слэш в конце.
@@ -361,11 +369,13 @@ class YandexMusicProvider(MediaProvider):
         self,
         url: str,
         output_dir: Path,
-        audio_bitrate_kbps: int | None = None,
-        progress_callback=None,
+        options: DownloadOptions,
+        progress_callback: ProgressCallback | None = None,
         cancel_event: Event | None = None,
         ) -> None:
         """Скачивает трек по URL в указанный каталог."""
+        if not self.supports(options.kind):
+            raise ValueError("Яндекс Музыка поддерживает только аудио")
         output_dir.mkdir(parents=True, exist_ok=True)
         if cancel_event is not None and cancel_event.is_set():
             return
@@ -385,10 +395,9 @@ class YandexMusicProvider(MediaProvider):
         output_path = output_dir / f"{filename}.mp3"
         # Загружаем аудио в выбранном качестве.
         
-        requested_bitrate = audio_bitrate_kbps or 192
         actual_bitrate = self._select_bitrate(
             track,
-            requested_bitrate,
+            options.audio_bitrate_kbps,
         )
 
         track.download(

@@ -3,6 +3,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
+from typing import ClassVar, Literal
+
+MediaKind = Literal["audio", "video"]
+
+
+@dataclass(frozen=True)
+class DownloadOptions:
+    """Что и в каком качестве скачивать."""
+
+    kind: MediaKind = "audio"
+    audio_bitrate_kbps: int = 192
+    # Максимальная высота видео (1080, 720...); None — без ограничения.
+    video_max_height: int | None = None
 
 
 @dataclass
@@ -28,6 +41,13 @@ ProgressCallback = Callable[[float], None]
 
 class MediaProvider(ABC):
     """Базовый интерфейс источника медиа."""
+
+    # Какие режимы скачивания поддерживает источник.
+    supported_kinds: ClassVar[frozenset[MediaKind]] = frozenset({"audio", "video"})
+
+    def supports(self, kind: MediaKind) -> bool:
+        return kind in self.supported_kinds
+
     @abstractmethod
     def can_handle(self, url: str) -> bool:
         """Проверяет, может ли источник обработать данный URL."""
@@ -43,7 +63,7 @@ class MediaProvider(ABC):
         self,
         url: str,
         output_dir: Path,
-        audio_bitrate_kbps: int | None = None,
+        options: DownloadOptions,
         progress_callback: ProgressCallback | None = None,
         cancel_event: Event | None = None,
         ) -> None:

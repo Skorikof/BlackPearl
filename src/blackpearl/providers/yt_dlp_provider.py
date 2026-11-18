@@ -4,7 +4,13 @@ from urllib.parse import urlparse
 
 import yt_dlp
 
-from blackpearl.providers.base import MediaInfo, MediaProvider, ProgressCallback
+from blackpearl.core.ffmpeg import require_ffmpeg
+from blackpearl.providers.base import (
+    DownloadOptions,
+    MediaInfo,
+    MediaProvider,
+    ProgressCallback,
+)
 
 
 class YtDlpProvider(MediaProvider):
@@ -44,15 +50,51 @@ class YtDlpProvider(MediaProvider):
             duration_seconds=info.get("duration"),
         )
 
-    
+    @staticmethod
+    def _build_format_options(
+        options: DownloadOptions,
+        ffmpeg_location: str,
+    ) -> dict:
+        """Опции yt-dlp, зависящие от режима скачивания."""
+        if options.kind == "audio":
+            return {
+                "format": "bestaudio/best",
+                "ffmpeg_location": ffmpeg_location,
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": str(options.audio_bitrate_kbps),
+                    }
+                ],
+            }
+
+        height = options.video_max_height
+        if height is not None:
+            video_format = (
+                f"bestvideo[height<={height}]+bestaudio"
+                f"/best[height<={height}]"
+            )
+        else:
+            video_format = "bestvideo+bestaudio/best"
+
+        return {
+            "format": video_format,
+            "ffmpeg_location": ffmpeg_location,
+            "merge_output_format": "mp4",
+        }
+
     def download(
         self,
         url: str,
         output_dir: Path,
-        audio_bitrate_kbps: int | None = None,
+        options: DownloadOptions,
         progress_callback: ProgressCallback | None = None,
         cancel_event: Event | None = None,
         ) -> None:
+        # ffmpeg нужен и для конвертации в mp3, и для склейки видео с аудио;
+        # проверяем заранее, чтобы не скачивать файл впустую.
+        ffmpeg_location = require_ffmpeg()
         output_dir.mkdir(parents=True, exist_ok=True)
 
         def progress_hook(data: dict) -> None:
@@ -74,13 +116,14 @@ class YtDlpProvider(MediaProvider):
                 percent = downloaded / total * 100
                 progress_callback(min(percent, 100.0))
 
-        options = {
+        ydl_options = {
             "paths": {"home": str(output_dir)},
             "outtmpl": "%(title)s.%(ext)s",
             "noplaylist": True,
             "progress_hooks": [progress_hook],
+            **self._build_format_options(options, ffmpeg_location),
         }
 
-        with yt_dlp.YoutubeDL(options) as downloader:
+        with yt_dlp.YoutubeDL(ydl_options) as downloader:
             downloader.download([url])
 
