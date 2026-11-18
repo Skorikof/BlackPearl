@@ -1,10 +1,12 @@
+from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Slot
+from PySide6.QtCore import QThread, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QFileDialog,
     QMainWindow,
+    QMessageBox,
 )
 
 from blackpearl.providers.base import DownloadOptions, TrackEntry
@@ -18,7 +20,16 @@ from blackpearl.ui.ui_py.main_ui import Ui_MainWindow
 from blackpearl.ui.widgets.audio_table import AudioTable
 
 
+@dataclass(frozen=True)
+class QueueItem:
+    url: str
+    title: str
+
+
 class MainWindow(QMainWindow):
+    # Сколько ошибок показывать в итоговом окне, остальные — числом.
+    MAX_REPORTED_FAILURES = 15
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -35,7 +46,9 @@ class MainWindow(QMainWindow):
         self._current_url = ""
         self._table_entries: list[TrackEntry | str] = []
 
-        self._download_queue: list[TrackEntry | str] = []
+        self._download_queue: list[QueueItem] = []
+        # Треки, которые не удалось скачать: (название, текст ошибки).
+        self._failed: list[tuple[str, str]] = []
         # Провайдер очереди фиксируется при старте загрузки,
         # чтобы новая проверка ссылки не могла его подменить.
         self._download_provider = None
@@ -118,6 +131,10 @@ class MainWindow(QMainWindow):
         self.ui.audio_cancel_btn.setEnabled(downloading)
         self.ui.audio_check_btn.setEnabled(not downloading)
 
+    @staticmethod
+    def _entry_url(entry: TrackEntry | str) -> str:
+        return entry if isinstance(entry, str) else entry.url
+
     def _is_downloading(self) -> bool:
         return bool(self._download_queue) or self.download_manager.is_busy
 
@@ -195,13 +212,14 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def show_info(self, info) -> None:
         self._table_entries = [self._current_url]
-        self._table.set_row_count(1)
-        self._table.add_table_row(
-            0,
-            "",
-            info.title,
-            info.duration_seconds,
-        )
+        with self._table.batch_update():
+            self._table.set_row_count(1)
+            self._table.add_table_row(
+                0,
+                "",
+                info.title,
+                info.duration_seconds,
+            )
         self._update_table_controls()
         self._set_status(f"Найдено: {info.title}")
 
@@ -243,15 +261,17 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def show_collection(self, tracks: list[TrackEntry]) -> None:
         self._table_entries = list(tracks)
-        self._table.set_row_count(len(tracks))
-
-        for row, track in enumerate(tracks):
-            self._table.add_table_row(
-                row,
-                track.artists,
-                track.title,
-                track.duration_seconds,
-            )
+        # Без batch_update каждая ячейка вызывала бы itemChanged
+        # и полный пересчёт кнопок — квадратичная сложность.
+        with self._table.batch_update():
+            self._table.set_row_count(len(tracks))
+            for row, track in enumerate(tracks):
+                self._table.add_table_row(
+                    row,
+                    track.artists,
+                    track.title,
+                    track.duration_seconds,
+                )
 
         self._update_table_controls()
         self._set_status(f"Найдено треков: {len(tracks)}")
@@ -266,17 +286,11 @@ class MainWindow(QMainWindow):
         self._close_if_pending()
 
     def select_all_tracks(self) -> None:
-        for row in range(self._table.get_row_count()):
-            item = self._table.get_item(row, 0)
-            if item is not None:
-                item.setCheckState(Qt.CheckState.Checked)
+        self._table.set_all_checked(True)
         self._update_table_controls()
 
     def select_no_tracks(self) -> None:
-        for row in range(self._table.get_row_count()):
-            item = self._table.get_item(row, 0)
-            if item is not None:
-                item.setCheckState(Qt.CheckState.Unchecked)
+        self._table.set_all_checked(False)
         self._update_table_controls()
 
     def start_download(self) -> None:
@@ -292,11 +306,12 @@ class MainWindow(QMainWindow):
         self._output_dir = Path(output_dir)
 
         self._download_queue = [
-            self._table_entries[row]
+            QueueItem(
+                url=self._entry_url(self._table_entries[row]),
+                title=self._table.row_title(row),
+            )
             for row in range(self._table.get_row_count())
-            if self._table.get_item(row, 0) is not None
-            and self._table.get_item(row, 0).checkState()
-            == Qt.CheckState.Checked
+            if self._table.is_checked(row)
         ]
         if not self._download_queue:
             self._set_status("Выбери хотя бы один трек")
@@ -305,6 +320,7 @@ class MainWindow(QMainWindow):
         self._download_provider = self._current_provider
         self._queue_total = len(self._download_queue)
         self._queue_index = 0
+        self._failed.clear()
         self._waiting_for_manager = False
         self._set_downloading(True)
         self.ui.audio_progressBar.setValue(0)
@@ -316,20 +332,14 @@ class MainWindow(QMainWindow):
             return
 
         item = self._download_queue[self._queue_index]
-        if isinstance(item, str):
-            url = item
-            title = "Медиа"
-        else:
-            url = item.url
-            title = f"{item.artists} — {item.title}"
-
         self._set_status(
-            f"Скачивание {self._queue_index + 1} из {self._queue_total}: {title}"
+            f"Скачивание {self._queue_index + 1} из {self._queue_total}: "
+            f"{item.title}"
         )
         try:
             self.download_manager.start_download(
                 provider=self._download_provider,
-                url=url,
+                url=item.url,
                 output_dir=self._output_dir,
                 options=DownloadOptions(
                     kind="audio",
@@ -369,9 +379,34 @@ class MainWindow(QMainWindow):
 
     def _finish_queue(self) -> None:
         self.ui.audio_progressBar.setValue(100)
-        self._set_status(f"Загрузка завершена. Скачано треков: {self._queue_total}")
+        failed = list(self._failed)
+        succeeded = self._queue_total - len(failed)
+        if failed:
+            self._set_status(
+                f"Загрузка завершена. Скачано {succeeded} из "
+                f"{self._queue_total}, ошибок: {len(failed)}"
+            )
+        else:
+            self._set_status(
+                f"Загрузка завершена. Скачано треков: {self._queue_total}"
+            )
         self._download_queue.clear()
+        self._failed.clear()
         self._set_downloading(False)
+        if failed:
+            self._report_failures(failed)
+
+    def _report_failures(self, failed: list[tuple[str, str]]) -> None:
+        lines = [f"• {title}: {message}" for title, message in failed]
+        if len(lines) > self.MAX_REPORTED_FAILURES:
+            hidden = len(lines) - self.MAX_REPORTED_FAILURES
+            lines = lines[: self.MAX_REPORTED_FAILURES]
+            lines.append(f"…и ещё {hidden}")
+        QMessageBox.warning(
+            self,
+            "Не все треки скачаны",
+            "Не удалось скачать:\n\n" + "\n".join(lines),
+        )
 
     @Slot()
     def download_cancelled(self) -> None:
@@ -382,7 +417,12 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def download_error(self, message: str) -> None:
-        self._waiting_for_manager = False
-        self._download_queue.clear()
-        self._set_status(f"Ошибка загрузки: {message}")
-        self._set_downloading(False)
+        # Ошибка одного трека не останавливает очередь: запоминаем её
+        # и переходим к следующему треку, когда менеджер освободится.
+        if self._queue_index < len(self._download_queue):
+            title = self._download_queue[self._queue_index].title
+        else:
+            title = "Медиа"
+        self._failed.append((title, message))
+        self._queue_index += 1
+        self._waiting_for_manager = True

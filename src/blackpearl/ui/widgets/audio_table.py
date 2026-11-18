@@ -1,3 +1,6 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -43,13 +46,45 @@ class AudioTable():
     def get_item(self, r, c):
         return self._table.item(r, c)
 
+    @contextmanager
+    def batch_update(self) -> Iterator[None]:
+        """Массовое изменение таблицы без сигнала itemChanged на каждую ячейку.
+
+        После выхода из блока вызывающий код должен сам один раз
+        обновить зависящие от таблицы элементы интерфейса.
+        """
+        was_blocked = self._table.blockSignals(True)
+        self._table.setUpdatesEnabled(False)
+        try:
+            yield
+        finally:
+            self._table.setUpdatesEnabled(True)
+            self._table.blockSignals(was_blocked)
+
+    def set_all_checked(self, checked: bool) -> None:
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        with self.batch_update():
+            for row in range(self._table.rowCount()):
+                item = self._table.item(row, 0)
+                if item is not None:
+                    item.setCheckState(state)
+
+    def is_checked(self, row: int) -> bool:
+        item = self._table.item(row, 0)
+        return item is not None and item.checkState() == Qt.CheckState.Checked
+
+    def row_title(self, row: int) -> str:
+        """Название строки в виде «Исполнитель — Название»."""
+        artist_item = self._table.item(row, 1)
+        title_item = self._table.item(row, 2)
+        artist = artist_item.text() if artist_item is not None else ""
+        title = title_item.text() if title_item is not None else ""
+        return f"{artist} — {title}" if artist else title
+
     def update_table_controls(self):
         flag_all = self._table.rowCount() > 0
         has_selected = any(
-            self._table.item(row, 0) is not None
-            and self._table.item(row, 0).checkState()
-            == Qt.CheckState.Checked
-            for row in range(self._table.rowCount())
+            self.is_checked(row) for row in range(self._table.rowCount())
         )
         return flag_all, has_selected
 
