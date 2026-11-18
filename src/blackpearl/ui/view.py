@@ -191,11 +191,11 @@ class MainWindow(QMainWindow):
     def show_info(self, info) -> None:
         self._table_entries = [self._current_url]
         self._table.set_rows(
-            [TableRow(artist="", title=info.title,
+            [TableRow(artist=info.artist, title=info.title,
                       duration_seconds=info.duration_seconds)]
         )
         self._update_table_controls()
-        self._set_status(f"Найдено: {info.title}")
+        self._set_status(f"Найдено: {info.display_name}")
 
     @Slot(str)
     def show_error(self, message: str) -> None:

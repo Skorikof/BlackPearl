@@ -513,7 +513,11 @@ def test_lossless_downloads_flac(provider, http, tmp_path, monkeypatch):
     assert outcome is DownloadOutcome.DOWNLOADED
     assert flac.read_bytes() == b"".join(CHUNKS)
     assert calls == [
-        {"quality": "lossless", "codecs": ["flac", "mp3"], "transport": "raw"}
+        {
+            "quality": "lossless",
+            "codecs": ["flac-mp4", "flac", "mp3"],
+            "transport": "raw",
+        }
     ]
     assert http.calls[0][0] == DIRECT_LINK
     assert [path.name for path in provider.tagged] == ["03 - Song.flac.part"]
@@ -545,10 +549,10 @@ def test_lossless_without_file_fails(provider, http, tmp_path, monkeypatch, file
 
 
 def test_lossless_rejects_unknown_codec(provider, http, tmp_path, monkeypatch):
-    track = make_lossless_track(FakeFileInfo(codec="flac-mp4"))
+    track = make_lossless_track(FakeFileInfo(codec="aac-mp4"))
     monkeypatch.setattr(provider, "_get_track", lambda url: track)
 
-    with pytest.raises(RuntimeError, match="flac-mp4"):
+    with pytest.raises(RuntimeError, match="aac-mp4"):
         provider.download(TRACK_URL, tmp_path, DownloadOptions(lossless=True))
 
 
@@ -656,3 +660,62 @@ def test_mp3_copy_does_not_block_lossless_download(provider, http, tmp_path, mon
 
     assert outcome is DownloadOutcome.DOWNLOADED
     assert (album_dir / "03 - Song.flac").exists()
+
+
+def test_flac_in_mp4_is_remuxed_to_flac(provider, http, tmp_path, monkeypatch):
+    """Яндекс отдаёт lossless как flac-mp4: звук вынимается из MP4 в .flac."""
+    remuxed = []
+
+    def fake_remux(source, destination, container):
+        remuxed.append((source.name, destination.name, container))
+        assert source.read_bytes() == b"".join(CHUNKS)
+        destination.write_bytes(b"flac data")
+
+    monkeypatch.setattr(yandex_music_provider, "remux_audio", fake_remux)
+    track = make_lossless_track(FakeFileInfo(codec="flac-mp4"))
+    monkeypatch.setattr(provider, "_get_track", lambda url: track)
+
+    outcome = provider.download(
+        TRACK_URL, tmp_path, DownloadOptions(lossless=True)
+    )
+
+    album_dir = tmp_path / "Artist" / "Album (2020)"
+    assert outcome is DownloadOutcome.DOWNLOADED
+    assert remuxed == [
+        ("03 - Song.flac.mp4.part", "03 - Song.flac.part", "flac")
+    ]
+    # Временные файлы удалены, остался только FLAC.
+    assert [path.name for path in album_dir.iterdir()] == ["03 - Song.flac"]
+    assert (album_dir / "03 - Song.flac").read_bytes() == b"flac data"
+    assert [path.name for path in provider.tagged] == ["03 - Song.flac.part"]
+
+
+def test_remux_error_removes_temporary_files(provider, http, tmp_path, monkeypatch):
+    def broken_remux(source, destination, container):
+        destination.write_bytes(b"half")
+        raise RuntimeError("Не удалось переупаковать аудио")
+
+    monkeypatch.setattr(yandex_music_provider, "remux_audio", broken_remux)
+    track = make_lossless_track(FakeFileInfo(codec="flac-mp4"))
+    monkeypatch.setattr(provider, "_get_track", lambda url: track)
+
+    with pytest.raises(RuntimeError, match="переупаковать"):
+        provider.download(TRACK_URL, tmp_path, DownloadOptions(lossless=True))
+
+    album_dir = tmp_path / "Artist" / "Album (2020)"
+    assert list(album_dir.iterdir()) == []
+
+
+def test_get_info_returns_artist_separately(monkeypatch):
+    provider = YandexMusicProvider()
+    track = make_track()
+    track.duration_ms = 187000
+    track.version = "Live"
+    monkeypatch.setattr(provider, "_get_track", lambda url: track)
+
+    info = provider.get_info(TRACK_URL)
+
+    assert info.title == "Song (Live)"
+    assert info.artist == "Artist"
+    assert info.display_name == "Artist — Song (Live)"
+    assert info.duration_seconds == 187

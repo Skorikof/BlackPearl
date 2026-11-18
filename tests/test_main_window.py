@@ -380,3 +380,23 @@ def test_audio_options_follow_quality_box(window, index, lossless, bitrate):
     assert options.kind == "audio"
     assert options.lossless is lossless
     assert options.audio_bitrate_kbps == bitrate
+
+
+def test_single_track_shows_artist_in_own_column(window):
+    class ArtistProvider(FlakyProvider):
+        def get_info(self, url):
+            return MediaInfo(
+                title="Song", artist="Artist", url=url, media_type="audio",
+                duration_seconds=60,
+            )
+
+    use_only(window, ArtistProvider())
+    window.ui.audio_url_le.setText("https://example.com/track/1")
+
+    window.check_url()
+    wait_until(lambda: window.ui.audio_check_btn.isEnabled())
+
+    table = window.ui.audio_tableWidget
+    assert table.item(0, 1).text() == "Artist"
+    assert table.item(0, 2).text() == "Song"
+    assert window.ui.audio_label.text() == "Найдено: Artist — Song"

@@ -46,6 +46,9 @@ class YtDlpProvider(MediaProvider):
 
         return MediaInfo(
             title=info.get("title") or "Без названия",
+            # Поле artist есть у музыкальных сервисов (YouTube Music и др.);
+            # у обычных видео исполнитель обычно уже в названии.
+            artist=info.get("artist") or "",
             url=url,
             media_type=media_type,
             duration_seconds=info.get("duration"),

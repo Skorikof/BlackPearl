@@ -190,3 +190,41 @@ def test_yt_dlp_cancel_is_reported_as_download_cancelled(monkeypatch, tmp_path):
         YtDlpProvider().download(
             "https://youtube.com/watch?v=1", tmp_path, DownloadOptions()
         )
+
+
+def test_remux_flac_from_mp4_with_real_ffmpeg(tmp_path):
+    """Настоящий ffmpeg: FLAC из MP4 перекладывается в .flac без перекодирования."""
+    import subprocess
+
+    from mutagen.flac import FLAC
+
+    ffmpeg_path = ffmpeg.find_ffmpeg()
+    if ffmpeg_path is None:
+        pytest.skip("ffmpeg недоступен")
+
+    source = tmp_path / "in.mp4"
+    subprocess.run(
+        [
+            ffmpeg_path, "-nostdin", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:a", "flac", str(source),
+        ],
+        check=True,
+    )
+    destination = tmp_path / "out.flac.part"
+
+    ffmpeg.remux_audio(source, destination, "flac")
+
+    audio = FLAC(destination)
+    assert audio.info.sample_rate > 0
+    assert round(audio.info.length) == 1
+
+
+def test_remux_reports_ffmpeg_error(tmp_path):
+    if ffmpeg.find_ffmpeg() is None:
+        pytest.skip("ffmpeg недоступен")
+    source = tmp_path / "broken.mp4"
+    source.write_bytes(b"not a video")
+
+    with pytest.raises(RuntimeError, match="переупаковать"):
+        ffmpeg.remux_audio(source, tmp_path / "out.flac", "flac")

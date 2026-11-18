@@ -12,6 +12,7 @@ from PIL import Image
 from yandex_music import Client
 
 from blackpearl.core.config import settings
+from blackpearl.core.ffmpeg import remux_audio
 from blackpearl.core.track_metadata import (
     SUFFIXES,
     VARIOUS_ARTISTS,
@@ -48,10 +49,19 @@ def _with_version(title: str, version: str | None) -> str:
     return f"{title} ({version})" if version else title
 
 
-# Кодеки, которые просим у get-file-info в режиме lossless. Сервер
-# отдаёт FLAC, если он есть, иначе лучший MP3 — поэтому треки
-# без lossless-версии тоже скачиваются.
-LOSSLESS_CODECS = ["flac", "mp3"]
+# Кодеки, которые просим у get-file-info в режиме lossless.
+# Яндекс отдаёт lossless только как "flac-mp4" (FLAC в контейнере MP4);
+# на запрос просто "flac" сервер молча возвращает MP3. Если lossless-версии
+# у трека нет, сервер вернёт лучший MP3 — такие треки тоже скачиваются.
+LOSSLESS_CODECS = ["flac-mp4", "flac", "mp3"]
+
+# Кодек из ответа сервера -> (формат итогового файла, нужно ли
+# вынимать звук из MP4-контейнера).
+CODEC_FORMATS: dict[str, tuple[str, bool]] = {
+    "mp3": ("mp3", False),
+    "flac": ("flac", False),
+    "flac-mp4": ("flac", True),
+}
 
 
 @dataclass(frozen=True)
@@ -63,6 +73,8 @@ class AudioSource:
     # Ключ AES (hex) для зашифрованной доставки (transport=encraw).
     key: str | None = None
     proxies: dict | None = None
+    # Звук приходит в MP4 и его нужно переложить в audio_format.
+    needs_remux: bool = False
 
 
 def _client_proxies(client) -> dict | None:
@@ -206,19 +218,16 @@ class YandexMusicProvider(MediaProvider, CollectionProvider):
     def get_info(self, url: str) -> MediaInfo:
         """Получает информацию о треке по URL."""
         track = self._get_track(url)
-        artists = ", ".join(
-            artist.name for artist in (track.artists or [])
-        )
-        title = track.title or "Без названия"
-        if artists:
-            title = f"{artists} — {title}"
         duration = (
             track.duration_ms / 1000
             if track.duration_ms
             else None
         )
         return MediaInfo(
-            title=title,
+            title=_with_version(
+                track.title or "Без названия", getattr(track, "version", None)
+            ),
+            artist=", ".join(_artist_names(track.artists)),
             url=url,
             media_type="audio",
             duration_seconds=duration,
@@ -326,14 +335,16 @@ class YandexMusicProvider(MediaProvider, CollectionProvider):
             raise RuntimeError(
                 "Яндекс Музыка не вернула файл в lossless-качестве"
             )
-        if info.codec not in SUFFIXES:
+        if info.codec not in CODEC_FORMATS:
             raise RuntimeError(f"Неподдерживаемый кодек: {info.codec}")
+        audio_format, needs_remux = CODEC_FORMATS[info.codec]
         key = info.key if info.transport == "encraw" and info.key else None
         return AudioSource(
             url=info.url,
-            audio_format=info.codec,
+            audio_format=audio_format,
             key=key,
             proxies=_client_proxies(info.client),
+            needs_remux=needs_remux,
         )
 
     @staticmethod
@@ -616,22 +627,33 @@ class YandexMusicProvider(MediaProvider, CollectionProvider):
         # Пока файл не скачан и не размечен тегами, он лежит
         # под временным именем — недокачанных файлов не остаётся.
         part_path = output_path.with_name(output_path.name + ".part")
+        # Файл в MP4-контейнере сначала скачивается рядом, потом звук
+        # перекладывается в part_path.
+        download_path = (
+            output_path.with_name(output_path.name + ".mp4.part")
+            if source.needs_remux
+            else part_path
+        )
 
         try:
             self._stream_to_file(
                 source.url,
-                part_path,
+                download_path,
                 source.proxies,
                 progress_callback,
                 cancel_event,
                 key=source.key,
             )
+            if source.needs_remux:
+                _raise_if_cancelled(cancel_event)
+                remux_audio(download_path, part_path, source.audio_format)
             self._write_metadata(
                 track, album, metadata, part_path, source.audio_format
             )
             part_path.replace(output_path)
         finally:
             part_path.unlink(missing_ok=True)
+            download_path.unlink(missing_ok=True)
 
         if progress_callback is not None:
             progress_callback(100.0)

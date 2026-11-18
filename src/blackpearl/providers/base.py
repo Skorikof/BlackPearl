@@ -48,6 +48,12 @@ class MediaInfo:
     url: str
     media_type: str
     duration_seconds: float | None = None
+    # Исполнитель отдельно от названия — для колонки таблицы.
+    artist: str = ""
+
+    @property
+    def display_name(self) -> str:
+        return f"{self.artist} — {self.title}" if self.artist else self.title
 
 
 @dataclass
